@@ -7,6 +7,7 @@ import asyncio
 import socket
 import ipaddress
 from functools import partial
+import struct
 
 import dnslib
 
@@ -68,11 +69,12 @@ class UDPDNSServer:
     logger.info('%r request record %s of %s', addr,
                 dnslib.QTYPE[dns.q.qtype], dns.q.qname)
     # TODO
-    ans = yield from query_dns(('127.0.0.1', 53), data)
+    ans = yield from query_dns(('8.8.8.8', 53), data, socket.SOCK_STREAM)
     s.sendto(ans, addr)
 
   def close(self):
     if self.sock:
+      self.loop.remove_reader(self.sock.fileno())
       self.sock.close()
       self.sock = None
 
@@ -89,21 +91,45 @@ def ip_family(ip):
     raise ValueError('unsupport IP address: %r', a)
 
 @asyncio.coroutine
+def recv_exactly(sock, n, *, loop=None):
+  loop = loop or asyncio.get_event_loop()
+  data = b''
+  left = n
+  while left:
+    data += yield from loop.sock_recv(sock, left)
+    left = n - len(data)
+  return data
+
+@asyncio.coroutine
 def query_dns(address, request, type=socket.SOCK_DGRAM, *,
               filter=None, loop=None):
+  # TODO: timeout handling
+  # TODO: reuse socket and connection
+
+  if type is socket.SOCK_STREAM:
+    request = struct.pack('!H', len(request)) + request
+
   if loop is None:
     loop = asyncio.get_event_loop()
   s = socket.socket(ip_family(address[0]), type)
+  s.setblocking(False)
   yield from loop.sock_connect(s, address)
   yield from loop.sock_sendall(s, request)
+
   while True:
-    data = yield from loop.sock_recv(s, 2048)
-    if filter and filter(data):
+    if type is socket.SOCK_STREAM:
+      header = yield from recv_exactly(s, 2)
+      n = struct.unpack('!H', header)[0]
+      ans = yield from recv_exactly(s, n)
+    else:
+      ans = yield from loop.sock_recv(s, 2048)
+    if filter and filter(ans):
       continue
     else:
       break
+
   s.close()
-  return data
+  return ans
 
 def main():
   loop = asyncio.get_event_loop()
