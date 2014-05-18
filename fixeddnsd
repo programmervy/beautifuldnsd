@@ -69,7 +69,7 @@ class UDPDNSServer:
     logger.info('%r request record %s of %s', addr,
                 dnslib.QTYPE[dns.q.qtype], dns.q.qname)
     # TODO
-    ans = yield from query_dns(('8.8.8.8', 53), data, socket.SOCK_STREAM)
+    ans = yield from config['clients'][0].query(data)
     s.sendto(ans, addr)
 
   def close(self):
@@ -80,6 +80,9 @@ class UDPDNSServer:
 
   def __del__(self):
     self.close()
+
+class ConnectionClosedError(ConnectionError):
+  pass
 
 def ip_family(ip):
   a = ipaddress.ip_address(ip)
@@ -96,40 +99,91 @@ def recv_exactly(sock, n, *, loop=None):
   data = b''
   left = n
   while left:
-    data += yield from loop.sock_recv(sock, left)
-    left = n - len(data)
+    d = yield from loop.sock_recv(sock, left)
+    if not d:
+      raise ConnectionClosedError
+    data += d
+    left -= len(d)
   return data
 
-@asyncio.coroutine
-def query_dns(address, request, type=socket.SOCK_DGRAM, *,
-              filter=None, loop=None):
-  # TODO: timeout handling
-  # TODO: reuse socket and connection
+class DNSClient:
+  sock = None
+  connecting = None
 
-  if type is socket.SOCK_STREAM:
-    request = struct.pack('!H', len(request)) + request
+  def __init__(self, address, type=socket.SOCK_DGRAM,
+               *, loop=None):
+    self.loop = loop or asyncio.get_event_loop()
+    self.address = address
+    self.type = type
+    self.connect()
 
-  if loop is None:
-    loop = asyncio.get_event_loop()
-  s = socket.socket(ip_family(address[0]), type)
-  s.setblocking(False)
-  yield from loop.sock_connect(s, address)
-  yield from loop.sock_sendall(s, request)
+  def connect(self):
+    self.close()
+    self.sock = socket.socket(ip_family(self.address[0]), self.type)
+    self.sock.setblocking(False)
+    self.connecting = self.loop.sock_connect(self.sock, self.address)
+    self.connecting.add_done_callback(self.connected)
 
-  while True:
+  def connected(self, fu):
+    fu.result()
+    self.connecting = None
+    logger.info('%s: just connected', self)
+
+  def __repr__(self):
+    return '<%s [%s]: %s>' % (
+      self.__class__.__name__,
+      self.format_address(),
+      'connecting' if self.connecting else 'connected',
+    )
+
+  def format_address(self):
+    return '%s:%s:%d' % (
+      'TCP' if self.type is socket.SOCK_STREAM else 'UDP',
+      self.address[0], self.address[1])
+
+  def close(self):
+    if self.sock:
+      self.sock.close()
+      self.sock = None
+
+  def __del__(self):
+    self.close()
+
+  @asyncio.coroutine
+  def query(self, request, filter=None):
+    if self.connecting:
+      yield from self.connecting
+      self.connecting = None
+
+    # TODO: timeout handling
+    type = self.type
+    loop = self.loop
+    s = self.sock
+
     if type is socket.SOCK_STREAM:
-      header = yield from recv_exactly(s, 2)
-      n = struct.unpack('!H', header)[0]
-      ans = yield from recv_exactly(s, n)
+      data = struct.pack('!H', len(request)) + request
     else:
-      ans = yield from loop.sock_recv(s, 2048)
-    if filter and filter(ans):
-      continue
-    else:
-      break
+      data = request
 
-  s.close()
-  return ans
+    try:
+      yield from loop.sock_sendall(s, data)
+      while True:
+        if type is socket.SOCK_STREAM:
+          header = yield from recv_exactly(s, 2)
+          n = struct.unpack('!H', header)[0]
+          ans = yield from recv_exactly(s, n)
+        else:
+          ans = yield from loop.sock_recv(s, 2048)
+        if filter and filter(ans):
+          continue
+        else:
+          break
+    except ConnectionError:
+      logger.warn('%s: connection error, reconnecting', self, exc_info=True)
+      self.connect()
+      ans = yield from self.query(request, filter)
+
+    return ans
 
 def main():
   loop = asyncio.get_event_loop()
@@ -142,6 +196,8 @@ if __name__ == '__main__':
   config_logging(level=logging.DEBUG)
   config = {
     'servers': [('127.0.0.1', 5353), ('::1', 5353)],
+    # 'clients': [DNSClient(('127.0.0.1', 53))],
+    'clients': [DNSClient(('127.0.0.1', 53), socket.SOCK_STREAM)],
   }
   try:
     main()
