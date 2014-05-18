@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+
+import sys
+import os
+import logging
+import asyncio
+import socket
+import ipaddress
+from functools import partial
+
+import dnslib
+
+logger = logging.getLogger('fixeddnsd')
+
+def config_logging(level=logging.WARN, style=None):
+  '''
+  ``style``: terminal or plain
+  '''
+  if style is None:
+    if os.isatty(sys.stderr.fileno()):
+      style = 'terminal'
+    else:
+      style = 'plain'
+
+  if style == 'plain':
+    logging.basicConfig(
+      level=level,
+      format='%(levelname)s: %(message)s',
+    )
+  elif style == 'terminal':
+    try:
+      from nicelogger import enable_pretty_logging
+      enable_pretty_logging(level)
+    except ImportError:
+      logging.basicConfig(
+        level=level,
+        format='%(asctime) s%(levelname)s: %(message)s',
+        datefmt='[%Y-%m-%d %H:%M:%S]',
+      )
+  else:
+    raise ValueError('bad logging style %r' % style)
+
+class UDPDNSServer:
+  sock = None
+
+  def __init__(self, address, *, loop=None):
+    self.sock = s = socket.socket(
+      ip_family(address[0]), socket.SOCK_DGRAM)
+    s.setblocking(False)
+    s.bind(address)
+
+    self.loop = loop = loop or asyncio.get_event_loop()
+    loop.add_reader(s.fileno(), self.on_request)
+
+  def on_request(self):
+    co = self.handle_request()
+    asyncio.Task(co, loop=self.loop)
+
+  @asyncio.coroutine
+  def handle_request(self):
+    s = self.sock
+    try:
+      data, addr = s.recvfrom(2048)
+    except BlockingIOError:
+      return
+
+    dns = dnslib.DNSRecord.parse(data)
+    logger.info('%r request record %s of %s', addr,
+                dnslib.QTYPE[dns.q.qtype], dns.q.qname)
+    # TODO
+    ans = yield from query_dns(('127.0.0.1', 53), data)
+    s.sendto(ans, addr)
+
+  def close(self):
+    if self.sock:
+      self.sock.close()
+      self.sock = None
+
+  def __del__(self):
+    self.close()
+
+def ip_family(ip):
+  a = ipaddress.ip_address(ip)
+  if a.version == 4:
+    return socket.AF_INET
+  elif a.version == 6:
+    return socket.AF_INET6
+  else:
+    raise ValueError('unsupport IP address: %r', a)
+
+@asyncio.coroutine
+def query_dns(address, request, type=socket.SOCK_DGRAM, *,
+              filter=None, loop=None):
+  if loop is None:
+    loop = asyncio.get_event_loop()
+  s = socket.socket(ip_family(address[0]), type)
+  yield from loop.sock_connect(s, address)
+  yield from loop.sock_sendall(s, request)
+  while True:
+    data = yield from loop.sock_recv(s, 2048)
+    if filter and filter(data):
+      continue
+    else:
+      break
+  s.close()
+  return data
+
+def main():
+  loop = asyncio.get_event_loop()
+  servers = [UDPDNSServer(s) for s in config['servers']]
+  logging.info('serving on %r.', config['servers'])
+  loop.run_forever()
+
+if __name__ == '__main__':
+  logging.getLogger('asyncio').setLevel(logging.WARN)
+  config_logging(level=logging.DEBUG)
+  config = {
+    'servers': [('127.0.0.1', 5353), ('::1', 5353)],
+  }
+  try:
+    main()
+  except KeyboardInterrupt:
+    pass
