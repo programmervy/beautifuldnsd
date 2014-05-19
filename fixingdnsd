@@ -41,10 +41,27 @@ def config_logging(level=logging.WARN, style=None):
   else:
     raise ValueError('bad logging style %r' % style)
 
-class UDPDNSServer:
+class DNSCommon:
+  def __repr__(self):
+    return '<%s [%s]>' % (
+      self.__class__.__name__,
+      self.format_address(),
+    )
+
+  def format_address(self):
+    return '%s:%s:%d' % (
+      'TCP' if self.type is socket.SOCK_STREAM else 'UDP',
+      self.address[0], self.address[1])
+
+  def __del__(self):
+    self.close()
+
+class UDPDNSServer(DNSCommon):
   sock = None
+  type = socket.SOCK_DGRAM
 
   def __init__(self, address, *, loop=None):
+    self.address = address
     self.sock = s = socket.socket(
       ip_family(address[0]), socket.SOCK_DGRAM)
     s.setblocking(False)
@@ -65,11 +82,21 @@ class UDPDNSServer:
     except BlockingIOError:
       return
 
-    dns = dnslib.DNSRecord.parse(data)
+    request = dnslib.DNSRecord.parse(data)
     logger.info('%r request record %s of %s', addr,
-                dnslib.QTYPE[dns.q.qtype], dns.q.qname)
-    # TODO
-    ans = yield from config['clients'][0].query(data)
+                dnslib.QTYPE[request.q.qtype], request.q.qname)
+    # TODO multiple servers
+    # TODO bogus_nxdomain auto detecting
+    ans, parsed = yield from config['clients'][0].query(
+      data, filters=(filter_badip,))
+    if is_bogus_nxdomain(parsed):
+      logger.warn('%s: bogus nxdomain, sending back nxdomain to %r',
+                  self, addr)
+      ans = request.reply()
+      ans.header.rcode = dnslib.RCODE.NXDOMAIN
+      ans = ans.pack()
+    else:
+      logger.debug('%s: sending back DNS answer to %r:\n%s', self, addr, parsed)
     s.sendto(ans, addr)
 
   def close(self):
@@ -77,9 +104,6 @@ class UDPDNSServer:
       self.loop.remove_reader(self.sock.fileno())
       self.sock.close()
       self.sock = None
-
-  def __del__(self):
-    self.close()
 
 class ConnectionClosedError(ConnectionError):
   pass
@@ -106,7 +130,17 @@ def recv_exactly(sock, n, *, loop=None):
     left -= len(d)
   return data
 
-class DNSClient:
+def filter_badip(dns):
+  if isinstance(dns.a.rdata, dnslib.A) and \
+     str(dns.a.rdata) in config['filtered_ips']:
+    return True
+
+def is_bogus_nxdomain(dns):
+  if isinstance(dns.a.rdata, dnslib.A) and \
+     str(dns.a.rdata) in config['bogus_ips']:
+    return True
+
+class DNSClient(DNSCommon):
   sock = None
   connecting = None
 
@@ -139,24 +173,10 @@ class DNSClient:
     self.connecting = None
     logger.info('%s: connected', self)
 
-  def __repr__(self):
-    return '<%s [%s]>' % (
-      self.__class__.__name__,
-      self.format_address(),
-    )
-
-  def format_address(self):
-    return '%s:%s:%d' % (
-      'TCP' if self.type is socket.SOCK_STREAM else 'UDP',
-      self.address[0], self.address[1])
-
   def close(self):
     if self.sock:
       self.sock.close()
       self.sock = None
-
-  def __del__(self):
-    self.close()
 
   @asyncio.coroutine
   def query(self, request, filters=()):
@@ -166,24 +186,26 @@ class DNSClient:
 
     # TODO: timeout handling
     # TODO: match dns.header.id
-    loop = self.loop
-    s = self.sock
     data = self.prepare_request(request)
 
     try:
-      yield from loop.sock_sendall(s, data)
+      yield from self.loop.sock_sendall(self.sock, data)
       while True:
+        skip = False
         ans = yield from self.recv_data()
+        dns = dnslib.DNSRecord.parse(ans)
         for f in filters:
-          if f(ans):
-            continue
-        break
+          if f(dns):
+            logger.warn('%s: skipping filtered answer:\n%s', self, dns.rr)
+            skip = True
+        if not skip:
+          break
     except ConnectionError:
       logger.warn('%s: connection error, reconnecting', self, exc_info=True)
       self.connect()
-      ans = yield from self.query(request, filters)
+      ans, dns = yield from self.query(request, filters)
 
-    return ans
+    return ans, dns
 
 class UDPDNSClient(DNSClient):
   def prepare_request(self, request):
@@ -191,7 +213,7 @@ class UDPDNSClient(DNSClient):
 
   @asyncio.coroutine
   def recv_data(self):
-    ans = yield from loop.sock_recv(self.sock, 2048)
+    ans = yield from self.loop.sock_recv(self.sock, 2048)
     return ans
 
 class TCPDNSClient(DNSClient):
@@ -218,7 +240,19 @@ if __name__ == '__main__':
   config = {
     'servers': [('127.0.0.1', 5353), ('::1', 5353)],
     # 'clients': [DNSClient(('127.0.0.1', 53))],
-    'clients': [DNSClient(('127.0.0.1', 53), socket.SOCK_STREAM)],
+    # 'clients': [DNSClient(('8.8.8.8', 53))],
+    'clients': [DNSClient(('218.104.111.114', 53))],
+    # 'clients': [DNSClient(('127.0.0.1', 53), socket.SOCK_STREAM)],
+    'filtered_ips': {
+      '159.106.121.75', '159.24.3.173', '202.106.1.2', '202.181.7.85',
+      '203.161.230.171', '203.98.7.65', '209.145.54.50', '216.234.179.13',
+      '243.185.187.39', '37.61.54.158', '4.36.66.178', '46.82.174.68',
+      '59.24.3.173', '64.33.88.161', '78.16.49.15', '8.7.198.45',
+      '93.46.8.89',
+    },
+    'bogus_ips': {
+      '220.250.64.18',
+    },
   }
   try:
     main()
