@@ -41,6 +41,41 @@ def config_logging(level=logging.WARN, style=None):
   else:
     raise ValueError('bad logging style %r' % style)
 
+def ip_family(ip):
+  a = ipaddress.ip_address(ip)
+  if a.version == 4:
+    return socket.AF_INET
+  elif a.version == 6:
+    return socket.AF_INET6
+  else:
+    raise ValueError('unsupport IP address: %r', a)
+
+@asyncio.coroutine
+def recv_exactly(sock, n, *, loop=None):
+  loop = loop or asyncio.get_event_loop()
+  data = b''
+  left = n
+  while left:
+    d = yield from loop.sock_recv(sock, left)
+    if not d:
+      raise ConnectionClosedError
+    data += d
+    left -= len(d)
+  return data
+
+def filter_badip(dns):
+  if isinstance(dns.a.rdata, dnslib.A) and \
+     str(dns.a.rdata) in config['filtered_ips']:
+    return True
+
+def is_bogus_nxdomain(dns):
+  if isinstance(dns.a.rdata, dnslib.A) and \
+     str(dns.a.rdata) in config['bogus_ips']:
+    return True
+
+class ConnectionClosedError(ConnectionError):
+  pass
+
 class DNSCommon:
   def __repr__(self):
     return '<%s [%s]>' % (
@@ -104,41 +139,6 @@ class UDPDNSServer(DNSCommon):
       self.loop.remove_reader(self.sock.fileno())
       self.sock.close()
       self.sock = None
-
-class ConnectionClosedError(ConnectionError):
-  pass
-
-def ip_family(ip):
-  a = ipaddress.ip_address(ip)
-  if a.version == 4:
-    return socket.AF_INET
-  elif a.version == 6:
-    return socket.AF_INET6
-  else:
-    raise ValueError('unsupport IP address: %r', a)
-
-@asyncio.coroutine
-def recv_exactly(sock, n, *, loop=None):
-  loop = loop or asyncio.get_event_loop()
-  data = b''
-  left = n
-  while left:
-    d = yield from loop.sock_recv(sock, left)
-    if not d:
-      raise ConnectionClosedError
-    data += d
-    left -= len(d)
-  return data
-
-def filter_badip(dns):
-  if isinstance(dns.a.rdata, dnslib.A) and \
-     str(dns.a.rdata) in config['filtered_ips']:
-    return True
-
-def is_bogus_nxdomain(dns):
-  if isinstance(dns.a.rdata, dnslib.A) and \
-     str(dns.a.rdata) in config['bogus_ips']:
-    return True
 
 class DNSClient(DNSCommon):
   sock = None
@@ -237,6 +237,8 @@ def main():
 if __name__ == '__main__':
   logging.getLogger('asyncio').setLevel(logging.WARN)
   config_logging(level=logging.DEBUG)
+  # TODO: read config from command line
+  # TODO: parse config file
   config = {
     'servers': [('127.0.0.1', 5353), ('::1', 5353)],
     # 'clients': [DNSClient(('127.0.0.1', 53))],
