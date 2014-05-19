@@ -110,6 +110,16 @@ class DNSClient:
   sock = None
   connecting = None
 
+  def __new__(cls, address, type=socket.SOCK_DGRAM,
+              *, loop=None):
+    if type is socket.SOCK_DGRAM:
+      C = UDPDNSClient
+    else:
+      C = TCPDNSClient
+
+    instance = super().__new__(C)
+    return instance
+
   def __init__(self, address, type=socket.SOCK_DGRAM,
                *, loop=None):
     self.loop = loop or asyncio.get_event_loop()
@@ -156,24 +166,14 @@ class DNSClient:
 
     # TODO: timeout handling
     # TODO: match dns.header.id
-    type = self.type
     loop = self.loop
     s = self.sock
-
-    if type is socket.SOCK_STREAM:
-      data = struct.pack('!H', len(request)) + request
-    else:
-      data = request
+    data = self.prepare_request(request)
 
     try:
       yield from loop.sock_sendall(s, data)
       while True:
-        if type is socket.SOCK_STREAM:
-          header = yield from recv_exactly(s, 2)
-          n = struct.unpack('!H', header)[0]
-          ans = yield from recv_exactly(s, n)
-        else:
-          ans = yield from loop.sock_recv(s, 2048)
+        ans = yield from self.recv_data()
         for f in filters:
           if f(ans):
             continue
@@ -183,6 +183,27 @@ class DNSClient:
       self.connect()
       ans = yield from self.query(request, filters)
 
+    return ans
+
+class UDPDNSClient(DNSClient):
+  def prepare_request(self, request):
+    return request
+
+  @asyncio.coroutine
+  def recv_data(self):
+    ans = yield from loop.sock_recv(self.sock, 2048)
+    return ans
+
+class TCPDNSClient(DNSClient):
+  def prepare_request(self, request):
+    return struct.pack('!H', len(request)) + request
+
+  @asyncio.coroutine
+  def recv_data(self):
+    s = self.sock
+    header = yield from recv_exactly(s, 2)
+    n = struct.unpack('!H', header)[0]
+    ans = yield from recv_exactly(s, n)
     return ans
 
 def main():
