@@ -149,7 +149,7 @@ class DNSClient:
     self.close()
 
   @asyncio.coroutine
-  def query(self, request, filter=None):
+  def query(self, request, filters=()):
     if self.connecting:
       yield from self.connecting
       self.connecting = None
@@ -174,14 +174,14 @@ class DNSClient:
           ans = yield from recv_exactly(s, n)
         else:
           ans = yield from loop.sock_recv(s, 2048)
-        if filter and filter(ans):
-          continue
-        else:
-          break
+        for f in filters:
+          if f(ans):
+            continue
+        break
     except ConnectionError:
       logger.warn('%s: connection error, reconnecting', self, exc_info=True)
       self.connect()
-      ans = yield from self.query(request, filter)
+      ans = yield from self.query(request, filters)
 
     return ans
 
