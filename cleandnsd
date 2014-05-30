@@ -13,6 +13,16 @@ import dnslib
 
 logger = logging.getLogger('fixeddnsd')
 
+# TODO: check for sane data
+
+# >>> host www.coderholic.com 114.114.114.114
+# Using domain server:
+# Name: 114.114.114.114
+# Address: 114.114.114.114#53
+# Aliases: 
+# 
+# Host www.coderholic.com not found: 2(SERVFAIL)
+
 def config_logging(level=logging.WARN, style=None):
   '''
   ``style``: terminal or plain
@@ -122,7 +132,7 @@ class UDPDNSServer(DNSCommon):
                 dnslib.QTYPE[request.q.qtype], request.q.qname)
     # TODO multiple servers
     # TODO bogus_nxdomain auto detecting
-    ans, parsed = yield from config['clients'][0].query(
+    ans, parsed = yield from config['primary_clients'][0].query(
       data, filters=(filter_badip,))
     if is_bogus_nxdomain(parsed):
       logger.warn('%s: bogus nxdomain, sending back nxdomain to %r',
@@ -241,10 +251,10 @@ if __name__ == '__main__':
   # TODO: parse config file
   config = {
     'servers': [('127.0.0.1', 5353), ('::1', 5353)],
-    # 'clients': [DNSClient(('127.0.0.1', 53))],
-    # 'clients': [DNSClient(('8.8.8.8', 53))],
-    'clients': [DNSClient(('218.104.111.114', 53))],
-    # 'clients': [DNSClient(('127.0.0.1', 53), socket.SOCK_STREAM)],
+    # 'primary_clients': [DNSClient(('127.0.0.1', 53))],
+    # 'primary_clients': [DNSClient(('8.8.8.8', 53))],
+    'primary_clients': [DNSClient(('218.104.111.114', 53))],
+    # 'primary_clients': [DNSClient(('127.0.0.1', 53), socket.SOCK_STREAM)],
     'filtered_ips': {
       '159.106.121.75', '159.24.3.173', '202.106.1.2', '202.181.7.85',
       '203.161.230.171', '203.98.7.65', '209.145.54.50', '216.234.179.13',
