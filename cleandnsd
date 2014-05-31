@@ -2,6 +2,7 @@
 
 import sys
 import os
+import base64
 import logging
 import asyncio
 import socket
@@ -83,6 +84,20 @@ def is_bogus_nxdomain(dns):
      str(dns.a.rdata) in config['bogus_ips']:
     return True
 
+@asyncio.coroutine
+def get_bogus_nxdomain():
+  r = base64.b64encode(os.urandom(24)).decode('ascii')
+  nxdomain = r.replace('/', '').replace('+', '') + '.com'
+  req = dnslib.DNSRecord.question(nxdomain).pack()
+  client = config['primary_clients'][0]
+  ans, parsed = yield from client.query(req)
+  if isinstance(parsed.a.rdata, dnslib.A):
+    ip = str(parsed.a.rdata)
+    logger.info('got bogus nxdomain: %s', ip)
+    config['bogus_ips'].add(ip)
+  else:
+    logger.debug('no bogus nxdomain found:\n%s', parsed)
+
 class ConnectionClosedError(ConnectionError):
   pass
 
@@ -131,7 +146,6 @@ class UDPDNSServer(DNSCommon):
     logger.info('%r request record %s of %s', addr,
                 dnslib.QTYPE[request.q.qtype], request.q.qname)
     # TODO multiple servers
-    # TODO bogus_nxdomain auto detecting
     ans, parsed = yield from config['primary_clients'][0].query(
       data, filters=(filter_badip,))
     if is_bogus_nxdomain(parsed):
@@ -211,6 +225,7 @@ class DNSClient(DNSCommon):
         if not skip:
           break
     except ConnectionError:
+      # FIXME: don't retry too many times
       logger.warn('%s: connection error, reconnecting', self, exc_info=True)
       self.connect()
       ans, dns = yield from self.query(request, filters)
@@ -242,6 +257,7 @@ def main():
   loop = asyncio.get_event_loop()
   servers = [UDPDNSServer(s) for s in config['servers']]
   logging.info('serving on %r.', config['servers'])
+  asyncio.async(get_bogus_nxdomain())
   loop.run_forever()
 
 if __name__ == '__main__':
@@ -252,9 +268,9 @@ if __name__ == '__main__':
   config = {
     'servers': [('127.0.0.1', 5353), ('::1', 5353)],
     # 'primary_clients': [DNSClient(('127.0.0.1', 53))],
-    # 'primary_clients': [DNSClient(('8.8.8.8', 53))],
-    'primary_clients': [DNSClient(('218.104.111.114', 53))],
-    # 'primary_clients': [DNSClient(('127.0.0.1', 53), socket.SOCK_STREAM)],
+    'primary_clients': [DNSClient(('8.8.8.8', 53))],
+    # 'primary_clients': [DNSClient(('218.104.111.114', 53))],
+    # 'primary_clients': [DNSClient(('8.8.8.8', 53), socket.SOCK_STREAM)],
     'filtered_ips': {
       '159.106.121.75', '159.24.3.173', '202.106.1.2', '202.181.7.85',
       '203.161.230.171', '203.98.7.65', '209.145.54.50', '216.234.179.13',
@@ -262,9 +278,7 @@ if __name__ == '__main__':
       '59.24.3.173', '64.33.88.161', '78.16.49.15', '8.7.198.45',
       '93.46.8.89',
     },
-    'bogus_ips': {
-      '220.250.64.18',
-    },
+    'bogus_ips': set(),
   }
   try:
     main()
