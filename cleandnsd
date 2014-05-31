@@ -89,7 +89,7 @@ def get_bogus_nxdomain():
   r = base64.b64encode(os.urandom(24)).decode('ascii')
   nxdomain = r.replace('/', '').replace('+', '') + '.com'
   req = dnslib.DNSRecord.question(nxdomain).pack()
-  for client in config['primary_clients']:
+  for client in config['primary_upstreams']:
     ans, parsed = yield from client.query(req)
     if isinstance(parsed.a.rdata, dnslib.A):
       ip = str(parsed.a.rdata)
@@ -146,7 +146,7 @@ class UDPDNSServer(DNSCommon):
     logger.info('%r request record %s of %s', addr,
                 dnslib.QTYPE[request.q.qtype], request.q.qname)
     # TODO multiple servers
-    ans, parsed = yield from config['primary_clients'][0].query(
+    ans, parsed = yield from config['primary_upstreams'][0].query(
       data, filters=(filter_badip,))
     if is_bogus_nxdomain(parsed):
       logger.warn('%s: bogus nxdomain, sending back nxdomain to %r',
@@ -267,10 +267,10 @@ if __name__ == '__main__':
   # TODO: parse config file
   config = {
     'servers': [('127.0.0.1', 5353), ('::1', 5353)],
-    # 'primary_clients': [DNSClient(('127.0.0.1', 53))],
-    'primary_clients': [DNSClient(('218.104.111.114', 53))],
-    'secondary_clients': [DNSClient(('8.8.8.8', 53))],
-    # 'primary_clients': [DNSClient(('8.8.8.8', 53), socket.SOCK_STREAM)],
+    # 'primary_upstreams': [DNSClient(('127.0.0.1', 53))],
+    'primary_upstreams': [DNSClient(('218.104.111.114', 53))],
+    'secondary_upstreams': [DNSClient(('8.8.8.8', 53))],
+    # 'primary_upstreams': [DNSClient(('8.8.8.8', 53), socket.SOCK_STREAM)],
     'filtered_ips': {
       '159.106.121.75', '159.24.3.173', '202.106.1.2', '202.181.7.85',
       '203.161.230.171', '203.98.7.65', '209.145.54.50', '216.234.179.13',
