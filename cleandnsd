@@ -12,17 +12,9 @@ import struct
 
 import dnslib
 
-logger = logging.getLogger('fixeddnsd')
+logger = logging.getLogger('cleandnsd')
 
-# TODO: check for sane data
-
-# >>> host www.coderholic.com 114.114.114.114
-# Using domain server:
-# Name: 114.114.114.114
-# Address: 114.114.114.114#53
-# Aliases: 
-# 
-# Host www.coderholic.com not found: 2(SERVFAIL)
+class SwitchServer(Exception): pass
 
 def config_logging(level=logging.WARN, style=None):
   '''
@@ -120,8 +112,13 @@ class UDPDNSServer(DNSCommon):
   sock = None
   type = socket.SOCK_DGRAM
 
-  def __init__(self, address, *, loop=None):
+  def __init__(self, address,
+               primary_upstreams, secondary_upstreams,
+               *, loop=None):
     self.address = address
+    self.primary_upstreams = primary_upstreams
+    self.secondary_upstreams = secondary_upstreams
+
     self.sock = s = socket.socket(
       ip_family(address[0]), socket.SOCK_DGRAM)
     s.setblocking(False)
@@ -255,7 +252,10 @@ class TCPDNSClient(DNSClient):
 
 def main():
   loop = asyncio.get_event_loop()
-  servers = [UDPDNSServer(s) for s in config['servers']]
+  servers = [
+    UDPDNSServer(
+      s, config['primary_upstreams'], config['secondary_upstreams'])
+    for s in config['servers']]
   logging.info('serving on %r.', config['servers'])
   asyncio.async(get_bogus_nxdomain())
   loop.run_forever()
@@ -279,6 +279,7 @@ if __name__ == '__main__':
       '93.46.8.89',
     },
     'bogus_ips': set(),
+    'query_method': 'failover', # or 'concurrent',
   }
   try:
     main()
