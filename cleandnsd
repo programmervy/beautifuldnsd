@@ -10,8 +10,11 @@ import ipaddress
 from functools import partial
 from itertools import chain
 import struct
+import time
 
 import dnslib
+
+from stats import Stat
 
 logger = logging.getLogger('cleandnsd')
 # TODO: handle truncated reply
@@ -85,7 +88,7 @@ def is_bogus_nxdomain(dns):
      str(dns.a.rdata) in config['bogus_ips']:
     return True
 
-# TODO: do it regularly
+# TODO: do it regularly. move into UDPDNSServer
 @asyncio.coroutine
 def get_bogus_nxdomain():
   r = base64.b64encode(os.urandom(24)).decode('ascii')
@@ -132,11 +135,19 @@ class UDPDNSServer(DNSCommon):
 
   def __init__(self, address,
                primary_upstreams, secondary_upstreams,
-               *, loop=None):
+               *, loop=None,
+               primary_timeout = 3,
+               secondary_timeout = 3):
     self.address = address
+    self.loop = loop = loop or asyncio.get_event_loop()
     self.primary_upstreams = primary_upstreams
     self.secondary_upstreams = secondary_upstreams
-    self.loop = loop = loop or asyncio.get_event_loop()
+    for c in primary_upstreams:
+      c.filters = (filter_badip_switch,)
+      c.timeout = primary_timeout
+    for c in secondary_upstreams:
+      c.filters = (filter_badip,)
+      c.timeout = secondary_timeout
 
     self.sock = s = socket.socket(
       ip_family(address[0]), socket.SOCK_DGRAM)
@@ -163,7 +174,7 @@ class UDPDNSServer(DNSCommon):
                 dnslib.QTYPE[request.q.qtype], request.q.qname)
 
     failed = False
-    it = chain(config['primary_upstreams'], config['secondary_upstreams'])
+    it = chain(self.primary_upstreams, self.secondary_upstreams)
     try:
       while True:
         server = next(it)
@@ -172,7 +183,7 @@ class UDPDNSServer(DNSCommon):
           ans, parsed = yield from server.query(request)
           break
         except SwitchServer:
-          it = iter(config['secondary_upstreams'])
+          it = iter(self.secondary_upstreams)
         except NextServer:
           logger.debug('%s: bad server %s. trying next server',
                        self, server)
@@ -219,6 +230,7 @@ class DNSClient(DNSCommon):
     self.address = address
     self.type = type
     self._id_dict = {}
+    self._stat = Stat()
     self.connect()
 
   def connect(self):
@@ -248,7 +260,10 @@ class DNSClient(DNSCommon):
     while True:
       try:
         yield from self.loop.sock_sendall(self.sock, data)
+        s = time.time()
         ans, dns = yield from self.recv_answer(request)
+        e = time.time()
+        self.record_time(e-s)
         break
       except ConnectionError:
         logger.warn('%s: connection error, reconnecting', self, exc_info=True)
@@ -301,6 +316,21 @@ class DNSClient(DNSCommon):
         return
     fu.set_result((ans, dns))
 
+  def record_time(self, t):
+    self._stat.add(t * 1000)
+
+  def __repr__(self):
+    try:
+      return '<%s [%s] (count/avg/mdev: %d/%.1f/%.1f)>' % (
+        self.__class__.__name__,
+        self.format_address(),
+        self._stat.n,
+        self._stat.avg,
+        self._stat.mdev,
+      )
+    except:
+      return super().__repr__()
+
 class UDPDNSClient(DNSClient):
   def prepare_request(self, request):
     return request.pack()
@@ -322,24 +352,14 @@ class TCPDNSClient(DNSClient):
     ans = yield from recv_exactly(s, n)
     return ans
 
-def LocalDNSClient(*args, **kwargs):
-  c = DNSClient(*args, **kwargs)
-  c.filters = (filter_badip_switch,)
-  c.timeout = local_timeout
-  return c
-
-def GlobalDNSClient(*args, **kwargs):
-  c = DNSClient(*args, **kwargs)
-  c.filters = (filter_badip,)
-  c.timeout = global_timeout
-  return c
-
 def main():
   loop = asyncio.get_event_loop()
   servers = [
     UDPDNSServer(
-      s, config['primary_upstreams'], config['secondary_upstreams'])
-    for s in config['servers']]
+      s, config['primary_upstreams'], config['secondary_upstreams'],
+      primary_timeout = config['primary_timeout'],
+      secondary_timeout = config['secondary_timeout'],
+    ) for s in config['servers']]
   logging.info('serving on %r.', config['servers'])
   asyncio.async(get_bogus_nxdomain())
   loop.run_forever()
@@ -349,12 +369,12 @@ if __name__ == '__main__':
   config_logging(level=logging.DEBUG)
   # TODO: read config from command line
   # TODO: parse config file
-  local_timeout = 1
-  global_timeout = 1
   config = {
     'servers': [('127.0.0.1', 5353), ('::1', 5353)],
-    'primary_upstreams': [LocalDNSClient(('218.104.111.114', 53))],
-    'secondary_upstreams': [GlobalDNSClient(('8.8.8.8', 53))],
+    'primary_upstreams': [DNSClient(('218.104.111.114', 53))],
+    'secondary_upstreams': [DNSClient(('8.8.8.8', 53))],
+    'primary_timeout': 1,
+    'secondary_timeout': 3,
     'filtered_ips': {
       '159.106.121.75', '159.24.3.173', '202.106.1.2', '202.181.7.85',
       '203.161.230.171', '203.98.7.65', '209.145.54.50', '216.234.179.13',
@@ -363,6 +383,7 @@ if __name__ == '__main__':
       '93.46.8.89',
     },
     'bogus_ips': set(),
+    # TODO: implemenet this
     'query_method': 'failover', # or 'concurrent',
   }
   try:
