@@ -271,7 +271,7 @@ class DNSClient(DNSCommon):
       fu = self._id_dict[dns.header.id]
     except KeyError:
       # drop unexpected answers
-      logger.warn('%s: dropping not-requested ans:', self, dns)
+      logger.warn('%s: dropping not-requested ans:\n%s', self, dns)
       return
 
     for f in self.filters:
