@@ -93,20 +93,22 @@ def is_bogus_nxdomain(dns):
      str(dns.a.rdata) in config['bogus_ips']:
     return True
 
-# TODO: do it regularly. move into UDPDNSServer
+# TODO: move into UDPDNSServer
 @asyncio.coroutine
-def get_bogus_nxdomain():
-  r = base64.b64encode(os.urandom(24)).decode('ascii')
-  nxdomain = r.replace('/', '').replace('+', '') + '.com'
-  req = dnslib.DNSRecord.question(nxdomain)
-  for client in config['primary_upstreams']:
-    ans, parsed = yield from client.query(req)
-    if isinstance(parsed.a.rdata, dnslib.A):
-      ip = str(parsed.a.rdata)
-      logger.info('got bogus nxdomain: %s', ip)
-      config['bogus_ips'].add(ip)
-    else:
-      logger.debug('no bogus nxdomain found:\n%s', parsed)
+def get_bogus_nxdomain(interval):
+  while True:
+    r = base64.b64encode(os.urandom(24)).decode('ascii')
+    nxdomain = r.replace('/', '').replace('+', '') + '.com'
+    req = dnslib.DNSRecord.question(nxdomain)
+    for client in config['primary_upstreams']:
+      ans, parsed = yield from client.query(req)
+      if isinstance(parsed.a.rdata, dnslib.A):
+        ip = str(parsed.a.rdata)
+        logger.info('got bogus nxdomain: %s', ip)
+        config['bogus_ips'].add(ip)
+      else:
+        logger.debug('no bogus nxdomain found:\n%s', parsed)
+    yield from asyncio.sleep(interval)
 
 class ConnectionClosedError(ConnectionError):
   pass
@@ -379,7 +381,8 @@ def main():
       secondary_timeout = config['secondary_timeout'],
     ) for s in config['servers']]
   logging.info('serving on %r.', config['servers'])
-  asyncio.async(get_bogus_nxdomain())
+  i = config['bogus_nxdomain_check_interval']
+  asyncio.async(get_bogus_nxdomain(i))
   loop.run_forever()
 
 if __name__ == '__main__':
@@ -393,6 +396,7 @@ if __name__ == '__main__':
     'secondary_upstreams': [DNSClient(('8.8.8.8', 53))],
     'primary_timeout': 1,
     'secondary_timeout': 3,
+    'bogus_nxdomain_check_interval': 7200, # every two hour
     'filtered_ips': {
       '159.106.121.75', '159.24.3.173', '202.106.1.2', '202.181.7.85',
       '203.161.230.171', '203.98.7.65', '209.145.54.50', '216.234.179.13',
