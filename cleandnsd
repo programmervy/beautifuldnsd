@@ -72,6 +72,11 @@ def recv_exactly(sock, n, *, loop=None):
     left -= len(d)
   return data
 
+def reply_with(request, rcode):
+  ans = request.reply()
+  ans.header.rcode = rcode
+  return ans.pack()
+
 def filter_badip(dns):
   if isinstance(dns.a.rdata, dnslib.A) and \
      str(dns.a.rdata) in config['filtered_ips']:
@@ -192,15 +197,11 @@ class UDPDNSServer(DNSCommon):
 
     if failed:
       logger.warn('%s: all servers failed to reply', self)
-      ans = request.reply()
-      ans.header.rcode = dnslib.RCODE.SERVFAIL
-      ans = ans.pack()
+      ans = reply_with(request, dnslib.RCODE.SERVFAIL)
     elif is_bogus_nxdomain(parsed):
       logger.warn('%s: bogus nxdomain, sending back nxdomain to %r',
                   self, addr)
-      ans = request.reply()
-      ans.header.rcode = dnslib.RCODE.NXDOMAIN
-      ans = ans.pack()
+      ans = reply_with(request, dnslib.RCODE.NXDOMAIN)
     else:
       logger.debug('%s: sending back DNS answer to %r:\n%s (%s): %s',
                    self, addr,
@@ -241,8 +242,15 @@ class DNSClient(DNSCommon):
     self.connecting.add_done_callback(self.connected)
 
   def connected(self, fu):
-    fu.result()
     self.connecting = None
+    try:
+      fu.result()
+    except OSError as e:
+      if e.errno == 101: # Network is unreachable
+        logger.error('%s: Network is unreachable', self)
+        return
+      else:
+        raise
     logger.info('%s: connected', self)
     self.watch_answers()
 
@@ -253,7 +261,6 @@ class DNSClient(DNSCommon):
   def query(self, request):
     if self.connecting:
       yield from self.connecting
-      self.connecting = None
 
     data = self.prepare_request(request)
 
@@ -271,6 +278,17 @@ class DNSClient(DNSCommon):
       except asyncio.TimeoutError:
         logger.warn('%s: request for %s timeout', self, request.q.qname)
         raise NextServer('this server is bad')
+      except OSError as e:
+        if e.errno in (22, 89):
+          # 22: Invalid argument
+          # 89: Destination address required (not connected)
+          logger.error('%s: network down', self)
+          self.connect()
+          ans = reply_with(request, dnslib.RCODE.SERVFAIL)
+          dns = dnslib.DNSRecord.parse(ans)
+          break
+        else:
+          raise
 
     return ans, dns
 
