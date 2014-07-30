@@ -13,6 +13,7 @@ import struct
 import dnslib
 
 logger = logging.getLogger('cleandnsd')
+# TODO: handle truncated reply
 
 class SwitchServer(Exception): pass
 
@@ -69,7 +70,13 @@ def recv_exactly(sock, n, *, loop=None):
 def filter_badip(dns):
   if isinstance(dns.a.rdata, dnslib.A) and \
      str(dns.a.rdata) in config['filtered_ips']:
-    return True
+    return 'skip'
+
+def filter_badip_switch(dns):
+  r = filter_badip(dns)
+  if r == 'skip':
+    r = 'switch'
+  return r
 
 def is_bogus_nxdomain(dns):
   if isinstance(dns.a.rdata, dnslib.A) and \
@@ -81,7 +88,7 @@ def is_bogus_nxdomain(dns):
 def get_bogus_nxdomain():
   r = base64.b64encode(os.urandom(24)).decode('ascii')
   nxdomain = r.replace('/', '').replace('+', '') + '.com'
-  req = dnslib.DNSRecord.question(nxdomain).pack()
+  req = dnslib.DNSRecord.question(nxdomain)
   for client in config['primary_upstreams']:
     ans, parsed = yield from client.query(req)
     if isinstance(parsed.a.rdata, dnslib.A):
@@ -95,6 +102,8 @@ class ConnectionClosedError(ConnectionError):
   pass
 
 class DNSCommon:
+  sock = None
+
   def __repr__(self):
     return '<%s [%s]>' % (
       self.__class__.__name__,
@@ -108,6 +117,12 @@ class DNSCommon:
 
   def __del__(self):
     self.close()
+
+  def close(self):
+    if self.sock:
+      self.loop.remove_reader(self.sock.fileno())
+      self.sock.close()
+      self.sock = None
 
 class UDPDNSServer(DNSCommon):
   sock = None
@@ -146,11 +161,11 @@ class UDPDNSServer(DNSCommon):
 
     # TODO multiple servers
     try:
-      ans, parsed = yield from config['primary_upstreams'][0].query(
-        data, filters=(filter_badip,), on_filtered='switch')
+      ans, parsed = yield from \
+          config['primary_upstreams'][0].query(request)
     except SwitchServer:
-      ans, parsed = yield from config['secondary_upstreams'][0].query(
-        data, filters=(filter_badip,))
+      ans, parsed = yield from \
+          config['secondary_upstreams'][0].query(request)
 
     if is_bogus_nxdomain(parsed):
       logger.warn('%s: bogus nxdomain, sending back nxdomain to %r',
@@ -163,15 +178,10 @@ class UDPDNSServer(DNSCommon):
                    parsed.q.qname, dnslib.QTYPE[parsed.q.qtype], parsed.rr)
     s.sendto(ans, addr)
 
-  def close(self):
-    if self.sock:
-      self.loop.remove_reader(self.sock.fileno())
-      self.sock.close()
-      self.sock = None
-
 class DNSClient(DNSCommon):
   sock = None
   connecting = None
+  filters = ()
 
   def __new__(cls, address, type=socket.SOCK_DGRAM,
               *, loop=None):
@@ -188,6 +198,7 @@ class DNSClient(DNSCommon):
     self.loop = loop or asyncio.get_event_loop()
     self.address = address
     self.type = type
+    self._id_dict = {}
     self.connect()
 
   def connect(self):
@@ -201,38 +212,23 @@ class DNSClient(DNSCommon):
     fu.result()
     self.connecting = None
     logger.info('%s: connected', self)
+    self.watch_answers()
 
-  def close(self):
-    if self.sock:
-      self.sock.close()
-      self.sock = None
+  def watch_answers(self):
+    self.loop.add_reader(self.sock.fileno(), self.on_answer)
 
   @asyncio.coroutine
-  def query(self, request, filters=(), on_filtered='skip'):
+  def query(self, request):
     if self.connecting:
       yield from self.connecting
       self.connecting = None
 
     # TODO: timeout handling
-    # TODO: match dns.header.id
     data = self.prepare_request(request)
 
     try:
       yield from self.loop.sock_sendall(self.sock, data)
-      while True:
-        skip = False
-        ans = yield from self.recv_data()
-        dns = dnslib.DNSRecord.parse(ans)
-        for f in filters:
-          if f(dns):
-            if on_filtered == 'skip':
-              logger.warn('%s: skipping filtered answer:\n%s', self, dns.rr)
-              skip = True
-            elif on_filtered == 'switch':
-              logger.warn('%s: bad IP. switching to secondary_upstreams.', self)
-              raise SwitchServer('IP is poisoned')
-        if not skip:
-          break
+      ans, dns = yield from self.recv_answer(request)
     except ConnectionError:
       # FIXME: don't retry too many times
       logger.warn('%s: connection error, reconnecting', self, exc_info=True)
@@ -241,9 +237,50 @@ class DNSClient(DNSCommon):
 
     return ans, dns
 
+  @asyncio.coroutine
+  def recv_answer(self, req):
+    loop = self.loop
+    fu = asyncio.Future(loop=loop)
+    id = req.header.id
+    self._id_dict[id] = fu
+    yield from asyncio.wait([fu], loop=loop)
+    try:
+      return fu.result()
+    finally:
+      del self._id_dict[id]
+
+  def on_answer(self):
+    co = self.handle_response()
+    asyncio.Task(co, loop=self.loop)
+
+  @asyncio.coroutine
+  def handle_response(self):
+    ans = yield from self.recv_data()
+    # recv_data (sock_recv) will overwrite the reader
+    self.watch_answers()
+    dns = dnslib.DNSRecord.parse(ans)
+
+    try:
+      fu = self._id_dict[dns.header.id]
+    except KeyError:
+      # drop unexpected answers
+      logger.warn('%s: dropping not-requested ans:', self, dns)
+      return
+
+    for f in self.filters:
+      action = f(dns)
+      if action == 'skip':
+        logger.warn('%s: skipping filtered answer:\n%s', self, dns.rr)
+        return
+      elif action == 'switch':
+        logger.warn('%s: bad IP. switching to secondary_upstreams.', self)
+        fu.set_exception(SwitchServer('IP is poisoned'))
+        return
+    fu.set_result((ans, dns))
+
 class UDPDNSClient(DNSClient):
   def prepare_request(self, request):
-    return request
+    return request.pack()
 
   @asyncio.coroutine
   def recv_data(self):
@@ -252,7 +289,7 @@ class UDPDNSClient(DNSClient):
 
 class TCPDNSClient(DNSClient):
   def prepare_request(self, request):
-    return struct.pack('!H', len(request)) + request
+    return struct.pack('!H', len(request)) + request.pack()
 
   @asyncio.coroutine
   def recv_data(self):
@@ -261,6 +298,16 @@ class TCPDNSClient(DNSClient):
     n = struct.unpack('!H', header)[0]
     ans = yield from recv_exactly(s, n)
     return ans
+
+def LocalDNSClient(*args, **kwargs):
+  c = DNSClient(*args, **kwargs)
+  c.filters = (filter_badip_switch,)
+  return c
+
+def GlobalDNSClient(*args, **kwargs):
+  c = DNSClient(*args, **kwargs)
+  c.filters = (filter_badip,)
+  return c
 
 def main():
   loop = asyncio.get_event_loop()
@@ -279,11 +326,8 @@ if __name__ == '__main__':
   # TODO: parse config file
   config = {
     'servers': [('127.0.0.1', 5353), ('::1', 5353)],
-    # 'primary_upstreams': [DNSClient(('127.0.0.1', 53))],
-    'primary_upstreams': [DNSClient(('218.104.111.114', 53))],
-    'secondary_upstreams': [DNSClient(('8.8.8.8', 53))],
-    # 'primary_upstreams': [DNSClient(('8.8.8.8', 53))],
-    # 'primary_upstreams': [DNSClient(('8.8.8.8', 53), socket.SOCK_STREAM)],
+    'primary_upstreams': [LocalDNSClient(('218.104.111.114', 53))],
+    'secondary_upstreams': [GlobalDNSClient(('8.8.8.8', 53))],
     'filtered_ips': {
       '159.106.121.75', '159.24.3.173', '202.106.1.2', '202.181.7.85',
       '203.161.230.171', '203.98.7.65', '209.145.54.50', '216.234.179.13',
