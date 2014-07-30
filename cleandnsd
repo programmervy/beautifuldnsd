@@ -16,6 +16,7 @@ logger = logging.getLogger('cleandnsd')
 # TODO: handle truncated reply
 
 class SwitchServer(Exception): pass
+class NextServer(Exception): pass
 
 def config_logging(level=logging.WARN, style=None):
   '''
@@ -159,13 +160,15 @@ class UDPDNSServer(DNSCommon):
     logger.info('%r request record %s of %s', addr,
                 dnslib.QTYPE[request.q.qtype], request.q.qname)
 
-    # TODO multiple servers
     try:
       ans, parsed = yield from \
           config['primary_upstreams'][0].query(request)
     except SwitchServer:
       ans, parsed = yield from \
           config['secondary_upstreams'][0].query(request)
+    except NextServer:
+      # TODO multiple servers
+      logger.warn('%s: should try next server', self)
 
     if is_bogus_nxdomain(parsed):
       logger.warn('%s: bogus nxdomain, sending back nxdomain to %r',
@@ -182,6 +185,7 @@ class DNSClient(DNSCommon):
   sock = None
   connecting = None
   filters = ()
+  timeout = 3
 
   def __new__(cls, address, type=socket.SOCK_DGRAM,
               *, loop=None):
@@ -223,17 +227,20 @@ class DNSClient(DNSCommon):
       yield from self.connecting
       self.connecting = None
 
-    # TODO: timeout handling
     data = self.prepare_request(request)
 
-    try:
-      yield from self.loop.sock_sendall(self.sock, data)
-      ans, dns = yield from self.recv_answer(request)
-    except ConnectionError:
-      # FIXME: don't retry too many times
-      logger.warn('%s: connection error, reconnecting', self, exc_info=True)
-      self.connect()
-      ans, dns = yield from self.query(request, filters)
+    for i in range(3):
+      try:
+        yield from self.loop.sock_sendall(self.sock, data)
+        ans, dns = yield from self.recv_answer(request)
+        break
+      except ConnectionError:
+        logger.warn('%s: connection error, reconnecting', self, exc_info=True)
+        self.connect()
+      except TimeoutError:
+        logger.warn('%s: request timeout', self)
+    else:
+      raise NextServer('this server is bad')
 
     return ans, dns
 
@@ -243,8 +250,8 @@ class DNSClient(DNSCommon):
     fu = asyncio.Future(loop=loop)
     id = req.header.id
     self._id_dict[id] = fu
-    yield from asyncio.wait([fu], loop=loop)
     try:
+      yield from asyncio.wait_for(fu, self.timeout, loop=loop)
       return fu.result()
     finally:
       del self._id_dict[id]
@@ -302,11 +309,13 @@ class TCPDNSClient(DNSClient):
 def LocalDNSClient(*args, **kwargs):
   c = DNSClient(*args, **kwargs)
   c.filters = (filter_badip_switch,)
+  c.timeout = local_timeout
   return c
 
 def GlobalDNSClient(*args, **kwargs):
   c = DNSClient(*args, **kwargs)
   c.filters = (filter_badip,)
+  c.timeout = global_timeout
   return c
 
 def main():
@@ -324,6 +333,8 @@ if __name__ == '__main__':
   config_logging(level=logging.DEBUG)
   # TODO: read config from command line
   # TODO: parse config file
+  local_timeout = 0.5
+  global_timeout = 1
   config = {
     'servers': [('127.0.0.1', 5353), ('::1', 5353)],
     'primary_upstreams': [LocalDNSClient(('218.104.111.114', 53))],
