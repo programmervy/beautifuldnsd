@@ -146,7 +146,8 @@ class UDPDNSServer(DNSCommon):
 
   def on_request(self):
     co = self.handle_request()
-    asyncio.Task(co, loop=self.loop)
+    fu = asyncio.Task(co, loop=self.loop)
+    fu.add_done_callback(lambda fu: fu.result())
 
   @asyncio.coroutine
   def handle_request(self):
@@ -237,7 +238,7 @@ class DNSClient(DNSCommon):
       except ConnectionError:
         logger.warn('%s: connection error, reconnecting', self, exc_info=True)
         self.connect()
-      except TimeoutError:
+      except asyncio.TimeoutError:
         logger.warn('%s: request timeout', self)
     else:
       raise NextServer('this server is bad')
@@ -258,7 +259,8 @@ class DNSClient(DNSCommon):
 
   def on_answer(self):
     co = self.handle_response()
-    asyncio.Task(co, loop=self.loop)
+    fu = asyncio.Task(co, loop=self.loop)
+    fu.add_done_callback(lambda fu: fu.result())
 
   @asyncio.coroutine
   def handle_response(self):
