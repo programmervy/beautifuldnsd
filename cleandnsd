@@ -119,13 +119,13 @@ class UDPDNSServer(DNSCommon):
     self.address = address
     self.primary_upstreams = primary_upstreams
     self.secondary_upstreams = secondary_upstreams
+    self.loop = loop = loop or asyncio.get_event_loop()
 
     self.sock = s = socket.socket(
       ip_family(address[0]), socket.SOCK_DGRAM)
     s.setblocking(False)
     s.bind(address)
 
-    self.loop = loop = loop or asyncio.get_event_loop()
     loop.add_reader(s.fileno(), self.on_request)
 
   def on_request(self):
@@ -159,7 +159,8 @@ class UDPDNSServer(DNSCommon):
       ans.header.rcode = dnslib.RCODE.NXDOMAIN
       ans = ans.pack()
     else:
-      logger.debug('%s: sending back DNS answer to %r:\n%s', self, addr, parsed)
+      logger.debug('%s: sending back DNS answer to %r:\n%s (%s): %s', self, addr,
+                   parsed.q.qname, dnslib.QTYPE[parsed.q.qtype], parsed.rr)
     s.sendto(ans, addr)
 
   def close(self):
