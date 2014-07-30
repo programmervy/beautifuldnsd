@@ -8,6 +8,7 @@ import asyncio
 import socket
 import ipaddress
 from functools import partial
+from itertools import chain
 import struct
 
 import dnslib
@@ -161,25 +162,39 @@ class UDPDNSServer(DNSCommon):
     logger.info('%r request record %s of %s', addr,
                 dnslib.QTYPE[request.q.qtype], request.q.qname)
 
+    failed = False
+    it = chain(config['primary_upstreams'], config['secondary_upstreams'])
     try:
-      ans, parsed = yield from \
-          config['primary_upstreams'][0].query(request)
-    except SwitchServer:
-      ans, parsed = yield from \
-          config['secondary_upstreams'][0].query(request)
-    except NextServer:
-      # TODO multiple servers
-      logger.warn('%s: should try next server', self)
+      while True:
+        server = next(it)
+        logger.debug('%s: trying server %s', self, server)
+        try:
+          ans, parsed = yield from server.query(request)
+          break
+        except SwitchServer:
+          it = iter(config['secondary_upstreams'])
+        except NextServer:
+          logger.debug('%s: bad server %s. trying next server',
+                       self, server)
+    except StopIteration:
+      failed = True
 
-    if is_bogus_nxdomain(parsed):
+    if failed:
+      logger.warn('%s: all servers failed to reply', self)
+      ans = request.reply()
+      ans.header.rcode = dnslib.RCODE.SERVFAIL
+      ans = ans.pack()
+    elif is_bogus_nxdomain(parsed):
       logger.warn('%s: bogus nxdomain, sending back nxdomain to %r',
                   self, addr)
       ans = request.reply()
       ans.header.rcode = dnslib.RCODE.NXDOMAIN
       ans = ans.pack()
     else:
-      logger.debug('%s: sending back DNS answer to %r:\n%s (%s): %s', self, addr,
+      logger.debug('%s: sending back DNS answer to %r:\n%s (%s): %s',
+                   self, addr,
                    parsed.q.qname, dnslib.QTYPE[parsed.q.qtype], parsed.rr)
+
     s.sendto(ans, addr)
 
 class DNSClient(DNSCommon):
@@ -230,7 +245,7 @@ class DNSClient(DNSCommon):
 
     data = self.prepare_request(request)
 
-    for i in range(3):
+    while True:
       try:
         yield from self.loop.sock_sendall(self.sock, data)
         ans, dns = yield from self.recv_answer(request)
@@ -239,9 +254,8 @@ class DNSClient(DNSCommon):
         logger.warn('%s: connection error, reconnecting', self, exc_info=True)
         self.connect()
       except asyncio.TimeoutError:
-        logger.warn('%s: request timeout', self)
-    else:
-      raise NextServer('this server is bad')
+        logger.warn('%s: request for %s timeout', self, request.q.qname)
+        raise NextServer('this server is bad')
 
     return ans, dns
 
@@ -335,7 +349,7 @@ if __name__ == '__main__':
   config_logging(level=logging.DEBUG)
   # TODO: read config from command line
   # TODO: parse config file
-  local_timeout = 0.5
+  local_timeout = 1
   global_timeout = 1
   config = {
     'servers': [('127.0.0.1', 5353), ('::1', 5353)],
