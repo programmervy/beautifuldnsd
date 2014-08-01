@@ -224,6 +224,9 @@ class UDPDNSServer(DNSCommon):
       except StopIteration:
         concurrent_delay = None
         no_more = True
+        if not futures:
+          failed = True
+          break
 
       done, pending = yield from asyncio.wait(
         futures, loop=self.loop,
