@@ -18,6 +18,7 @@ from stats import Stat
 
 logger = logging.getLogger('cleandnsd')
 # TODO: handle truncated reply
+SERVFAIL = dnslib.RCODE.SERVFAIL
 
 class SwitchServer(Exception): pass
 class NextServer(Exception): pass
@@ -97,18 +98,29 @@ def is_bogus_nxdomain(dns):
 @asyncio.coroutine
 def get_bogus_nxdomain(interval):
   while True:
+    interval_ = interval
     r = base64.b64encode(os.urandom(24)).decode('ascii')
     nxdomain = r.replace('/', '').replace('+', '') + '.com'
     req = dnslib.DNSRecord.question(nxdomain)
     for client in config['primary_upstreams']:
-      ans, parsed = yield from client.query(req)
+      try:
+        ans, parsed = yield from client.query(req)
+      except Exception as e:
+        logger.debug('%s while discovering bogus IP. Will try later.', e)
+        interval_ = 2
+        continue
+
+      if parsed.header.rcode == SERVFAIL:
+        logger.debug('SERVFAIL while discovering bogus IP. Will try later.')
+        interval_ = 2
+        continue
       if isinstance(parsed.a.rdata, dnslib.A):
         ip = str(parsed.a.rdata)
         logger.info('got bogus nxdomain: %s', ip)
         config['bogus_ips'].add(ip)
       else:
         logger.debug('no bogus nxdomain found:\n%s', parsed)
-    yield from asyncio.sleep(interval)
+    yield from asyncio.sleep(interval_)
 
 class ConnectionClosedError(ConnectionError):
   pass
@@ -188,9 +200,9 @@ class UDPDNSServer(DNSCommon):
         logger.debug('%s: trying server %s', self, server)
         try:
           ans, parsed = yield from server.query(request)
-          if parsed.header.rcode == dnslib.RCODE.SERVFAIL:
+          if parsed.header.rcode == SERVFAIL:
             #TODO: stat SERVFAIL
-            logger.warn('%s: server failed', self, server)
+            logger.warn('%s: server %s failed', self, server)
             continue
           break
         except SwitchServer:
@@ -203,7 +215,7 @@ class UDPDNSServer(DNSCommon):
 
     if failed:
       logger.warn('%s: all servers failed to reply', self)
-      ans = reply_with(request, dnslib.RCODE.SERVFAIL)
+      ans = reply_with(request, SERVFAIL)
     elif is_bogus_nxdomain(parsed):
       logger.warn('%s: bogus nxdomain, sending back nxdomain to %r',
                   self, addr)
@@ -289,7 +301,7 @@ class DNSClient(DNSCommon):
           # 89: Destination address required (not connected)
           logger.error('%s: network down', self)
           self.connect()
-          ans = reply_with(request, dnslib.RCODE.SERVFAIL)
+          ans = reply_with(request, SERVFAIL)
           dns = dnslib.DNSRecord.parse(ans)
           break
         else:
