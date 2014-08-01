@@ -193,6 +193,7 @@ class UDPDNSServer(DNSCommon):
 
     no_more = False
     failed = False
+    no_primary = False
     concurrent_delay = self.concurrent_delay
     if concurrent_delay is None:
       # try one by one
@@ -204,7 +205,10 @@ class UDPDNSServer(DNSCommon):
     futures = []
     while True:
       try:
-        server = next(it)
+        while True:
+          server = next(it)
+          if not no_primary or server not in self.primary_upstreams:
+            break
         logger.debug('%s: trying server %s', self, server)
         fu = asyncio.async(server.query(request))
         futures.append(fu)
@@ -233,7 +237,7 @@ class UDPDNSServer(DNSCommon):
           got_it = True
           break
         elif isinstance(ex, SwitchServer):
-          it = iter(self.secondary_upstreams)
+          no_primary = True
         elif isinstance(ex, asyncio.TimeoutError):
           pass
         else:
