@@ -188,6 +188,10 @@ class UDPDNSServer(DNSCommon):
         logger.debug('%s: trying server %s', self, server)
         try:
           ans, parsed = yield from server.query(request)
+          if parsed.header.rcode == dnslib.RCODE.SERVFAIL:
+            #TODO: stat SERVFAIL
+            logger.warn('%s: server failed', self, server)
+            continue
           break
         except SwitchServer:
           it = iter(self.secondary_upstreams)
@@ -205,9 +209,8 @@ class UDPDNSServer(DNSCommon):
                   self, addr)
       ans = reply_with(request, dnslib.RCODE.NXDOMAIN)
     else:
-      logger.debug('%s: sending back DNS answer to %r:\n%s (%s): %s',
-                   self, addr,
-                   parsed.q.qname, dnslib.QTYPE[parsed.q.qtype], parsed.rr)
+      logger.debug('%s: sending back DNS answer to %r:\n%s',
+                   self, addr, parsed)
 
     s.sendto(ans, addr)
 
