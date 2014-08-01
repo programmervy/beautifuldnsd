@@ -104,7 +104,7 @@ def get_bogus_nxdomain(interval):
       try:
         ans, parsed = yield from client.query(req)
       except Exception as e:
-        logger.debug('%s while discovering bogus IP. Will try later.', e)
+        logger.debug('%r while discovering bogus IP. Will try later.', e)
         interval_ = 2
         continue
 
@@ -126,6 +126,12 @@ class ConnectionClosedError(ConnectionError):
 class DNSCommon:
   sock = None
 
+  @property
+  def _stat(self):
+    if not hasattr(self, '_stat_'):
+      self._stat_ = Stat()
+    return self._stat_
+
   def __repr__(self):
     return '<%s [%s]>' % (
       self.__class__.__name__,
@@ -145,6 +151,9 @@ class DNSCommon:
       self.loop.remove_reader(self.sock.fileno())
       self.sock.close()
       self.sock = None
+
+  def record_time(self, t):
+    self._stat.add(t * 1000)
 
 class UDPDNSServer(DNSCommon):
   sock = None
@@ -180,13 +189,13 @@ class UDPDNSServer(DNSCommon):
 
   @asyncio.coroutine
   def handle_request(self):
-    # TODO: record overall response time
     s = self.sock
     try:
       data, addr = s.recvfrom(2048)
     except BlockingIOError:
       return
 
+    start = time.time()
     request = dnslib.DNSRecord.parse(data)
     logger.info('%r request record %s of %s', addr,
                 dnslib.QTYPE[request.q.qtype], request.q.qname)
@@ -256,6 +265,13 @@ class UDPDNSServer(DNSCommon):
                    self, addr, parsed)
 
     s.sendto(ans, addr)
+    end = time.time()
+    self.record_time(end - start)
+
+  def log_stat(self):
+    logger.info('%s: count/avg/mdev: %d/%.1f/%.1f',
+                self,
+                self._stat.n, self._stat.avg, self._stat.mdev)
 
 class DNSClient(DNSCommon):
   sock = None
@@ -280,7 +296,6 @@ class DNSClient(DNSCommon):
     self.address = address
     self.type = type
     self._id_dict = {}
-    self._stat = Stat()
     self.connect()
 
   def connect(self):
@@ -396,9 +411,6 @@ class DNSClient(DNSCommon):
         return
     fu.set_result((ans, dns))
 
-  def record_time(self, t):
-    self._stat.add(t * 1000)
-
   def log_stat(self):
     logger.info('%s: count/avg/mdev/failed: %d/%.1f/%.1f/%d',
                 self,
@@ -427,7 +439,7 @@ class TCPDNSClient(DNSClient):
     return ans
 
 def show_stats(signo, frame):
-  for client in chain(
+  for client in chain(servers,
     config['primary_upstreams'], config['secondary_upstreams']):
     client.log_stat()
 
@@ -439,6 +451,7 @@ def main():
   except ImportError:
     pass
 
+  global servers
   loop = asyncio.get_event_loop()
   servers = [
     UDPDNSServer(
@@ -462,8 +475,8 @@ if __name__ == '__main__':
     'servers': [('127.0.0.1', 5353), ('::1', 5353)],
     'primary_upstreams': [DNSClient(('218.104.111.114', 53))],
     'secondary_upstreams': [DNSClient(('8.8.8.8', 53))],
-    'primary_timeout': 1,
-    'secondary_timeout': 3,
+    'primary_timeout': 5,
+    'secondary_timeout': 5,
     'bogus_nxdomain_check_interval': 7200, # every two hour
     'filtered_ips': {
       '159.106.121.75', '159.24.3.173', '202.106.1.2', '202.181.7.85',
