@@ -7,10 +7,10 @@ import logging
 import asyncio
 import socket
 import ipaddress
-from functools import partial
 from itertools import chain
 import struct
 import time
+import signal
 
 import dnslib
 
@@ -396,18 +396,11 @@ class DNSClient(DNSCommon):
   def record_time(self, t):
     self._stat.add(t * 1000)
 
-  def __repr__(self):
-    # TODO: use signal handler to show stats
-    try:
-      return '<%s [%s] (count/avg/mdev: %d/%.1f/%.1f)>' % (
-        self.__class__.__name__,
-        self.format_address(),
-        self._stat.n,
-        self._stat.avg,
-        self._stat.mdev,
-      )
-    except:
-      return super().__repr__()
+  def log_stat(self):
+    logger.info('%s: count/avg/mdev/failed: %d/%.1f/%.1f/%d',
+                self,
+                self._stat.n, self._stat.avg, self._stat.mdev,
+                self.failed_times)
 
 class UDPDNSClient(DNSClient):
   def prepare_request(self, request):
@@ -430,7 +423,19 @@ class TCPDNSClient(DNSClient):
     ans = yield from recv_exactly(s, n)
     return ans
 
+def show_stats(signo, frame):
+  for client in chain(
+    config['primary_upstreams'], config['secondary_upstreams']):
+    client.log_stat()
+
 def main():
+  try:
+    import setproctitle
+    setproctitle.setproctitle('cleandnsd')
+    del setproctitle
+  except ImportError:
+    pass
+
   loop = asyncio.get_event_loop()
   servers = [
     UDPDNSServer(
@@ -439,6 +444,7 @@ def main():
       secondary_timeout = config['secondary_timeout'],
       concurrent_delay = config['concurrent_delay'],
     ) for s in config['servers']]
+  signal.signal(signal.SIGUSR1, show_stats)
   logging.info('serving on %r.', config['servers'])
   i = config['bogus_nxdomain_check_interval']
   asyncio.async(get_bogus_nxdomain(i))
