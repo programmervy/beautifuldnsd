@@ -284,10 +284,7 @@ class DNSClient(DNSCommon):
     while True:
       try:
         yield from self.loop.sock_sendall(self.sock, data)
-        s = time.time()
         ans, dns = yield from self.recv_answer(request)
-        e = time.time()
-        self.record_time(e-s)
         break
       except ConnectionError:
         logger.warn('%s: connection error, reconnecting', self, exc_info=True)
@@ -315,11 +312,29 @@ class DNSClient(DNSCommon):
     fu = asyncio.Future(loop=loop)
     id = req.header.id
     self._id_dict[id] = fu
+    s = time.time()
     try:
       yield from asyncio.wait_for(fu, self.timeout, loop=loop)
+      e = time.time()
+      self.record_time(e-s)
+      try:
+        del self._id_dict[id]
+      except KeyError:
+        pass
       return fu.result()
-    finally:
-      del self._id_dict[id]
+    except asyncio.TimeoutError:
+      fu = asyncio.async(asyncio.wait_for(fu, 10, loop=loop))
+      fu.add_done_callback(partial(self.late_answer, id, s))
+      raise
+
+  def late_answer(self, fu, id, s):
+      e = time.time()
+      self.record_time(e-s)
+      try:
+        del self._id_dict[id]
+      except KeyError:
+        pass
+      fu.result()
 
   def on_answer(self):
     co = self.handle_response()
