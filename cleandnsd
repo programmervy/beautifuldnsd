@@ -21,7 +21,6 @@ logger = logging.getLogger('cleandnsd')
 SERVFAIL = dnslib.RCODE.SERVFAIL
 
 class SwitchServer(Exception): pass
-class NextServer(Exception): pass
 
 def config_logging(level=logging.WARN, style=None):
   '''
@@ -94,7 +93,6 @@ def is_bogus_nxdomain(dns):
      str(dns.a.rdata) in config['bogus_ips']:
     return True
 
-# TODO: move into UDPDNSServer
 @asyncio.coroutine
 def get_bogus_nxdomain(interval):
   while True:
@@ -154,13 +152,13 @@ class UDPDNSServer(DNSCommon):
 
   def __init__(self, address,
                primary_upstreams, secondary_upstreams,
-               *, loop=None,
-               primary_timeout = 3,
-               secondary_timeout = 3):
+               *, loop=None, concurrent_delay = None,
+               primary_timeout = 3, secondary_timeout = 3):
     self.address = address
     self.loop = loop = loop or asyncio.get_event_loop()
     self.primary_upstreams = primary_upstreams
     self.secondary_upstreams = secondary_upstreams
+    self.concurrent_delay = concurrent_delay
     for c in primary_upstreams:
       c.filters = (filter_badip_switch,)
       c.timeout = primary_timeout
@@ -177,11 +175,12 @@ class UDPDNSServer(DNSCommon):
 
   def on_request(self):
     co = self.handle_request()
-    fu = asyncio.Task(co, loop=self.loop)
+    fu = asyncio.async(co, loop=self.loop)
     fu.add_done_callback(lambda fu: fu.result())
 
   @asyncio.coroutine
   def handle_request(self):
+    # TODO: record overall response time
     s = self.sock
     try:
       data, addr = s.recvfrom(2048)
@@ -192,26 +191,55 @@ class UDPDNSServer(DNSCommon):
     logger.info('%r request record %s of %s', addr,
                 dnslib.QTYPE[request.q.qtype], request.q.qname)
 
+    no_more = False
     failed = False
-    it = chain(self.primary_upstreams, self.secondary_upstreams)
-    try:
-      while True:
+    concurrent_delay = self.concurrent_delay
+    if concurrent_delay is None:
+      # try one by one
+      it = chain(self.primary_upstreams, self.secondary_upstreams)
+    else:
+      # try crossingly
+      it = chain.from_iterable(
+        zip(self.primary_upstreams, self.secondary_upstreams))
+    futures = []
+    while True:
+      try:
         server = next(it)
         logger.debug('%s: trying server %s', self, server)
-        try:
-          ans, parsed = yield from server.query(request)
+        fu = asyncio.async(server.query(request))
+        futures.append(fu)
+      except StopIteration:
+        concurrent_delay = None
+        no_more = True
+
+      done, pending = yield from asyncio.wait(
+        futures, loop=self.loop,
+        timeout = concurrent_delay,
+        return_when=asyncio.FIRST_COMPLETED)
+      print(done, pending)
+
+      if no_more and not done:
+        failed = True
+        break
+
+      got_it = False
+      for fu in done:
+        futures.remove(fu)
+        ex = fu.exception()
+        if ex is None:
+          ans, parsed = fu.result()
           if parsed.header.rcode == SERVFAIL:
-            #TODO: stat SERVFAIL
-            logger.warn('%s: server %s failed', self, server)
             continue
+          got_it = True
           break
-        except SwitchServer:
+        elif isinstance(ex, SwitchServer):
           it = iter(self.secondary_upstreams)
-        except NextServer:
-          logger.debug('%s: bad server %s. trying next server',
-                       self, server)
-    except StopIteration:
-      failed = True
+        elif isinstance(ex, asyncio.TimeoutError):
+          pass
+        else:
+          raise ex
+      if got_it:
+        break
 
     if failed:
       logger.warn('%s: all servers failed to reply', self)
@@ -230,10 +258,10 @@ class DNSClient(DNSCommon):
   sock = None
   connecting = None
   filters = ()
-  timeout = 3
+  failed_times = 0
 
   def __new__(cls, address, type=socket.SOCK_DGRAM,
-              *, loop=None):
+               *, timeout=3, loop=None):
     if type is socket.SOCK_DGRAM:
       C = UDPDNSClient
     else:
@@ -243,8 +271,9 @@ class DNSClient(DNSCommon):
     return instance
 
   def __init__(self, address, type=socket.SOCK_DGRAM,
-               *, loop=None):
+               *, timeout=3, loop=None):
     self.loop = loop or asyncio.get_event_loop()
+    self.timeout = timeout
     self.address = address
     self.type = type
     self._id_dict = {}
@@ -276,69 +305,67 @@ class DNSClient(DNSCommon):
 
   @asyncio.coroutine
   def query(self, request):
+    '''
+    may raise asyncio.TimeoutError
+    '''
     if self.connecting:
       yield from self.connecting
 
     data = self.prepare_request(request)
-
-    while True:
-      try:
-        yield from self.loop.sock_sendall(self.sock, data)
-        ans, dns = yield from self.recv_answer(request)
-        break
-      except ConnectionError:
-        logger.warn('%s: connection error, reconnecting', self, exc_info=True)
-        self.connect()
-      except asyncio.TimeoutError:
-        logger.warn('%s: request for %s timeout', self, request.q.qname)
-        raise NextServer('this server is bad')
-      except OSError as e:
-        if e.errno in (22, 89):
-          # 22: Invalid argument
-          # 89: Destination address required (not connected)
-          logger.error('%s: network down', self)
-          self.connect()
-          ans = reply_with(request, SERVFAIL)
-          dns = dnslib.DNSRecord.parse(ans)
+    s = e = time.time()
+    do_record = True
+    dns = None
+    try:
+      while True:
+        timeleft = s + self.timeout - e
+        try:
+          yield from self.loop.sock_sendall(self.sock, data)
+          ans, dns = yield from asyncio.wait_for(
+            self.recv_answer(request),
+            timeout = timeleft)
           break
-        else:
-          raise
+        except ConnectionError:
+          logger.warn('%s: connection error, reconnecting', self, exc_info=True)
+          self.connect()
+        except OSError as e:
+          do_record = False
+          if e.errno in (22, 89):
+            # 22: Invalid argument
+            # 89: Destination address required (not connected)
+            logger.error('%s: network down', self)
+            self.connect()
+            ans = reply_with(request, SERVFAIL)
+            dns = dnslib.DNSRecord.parse(ans)
+            break
+          else:
+            raise
+        finally:
+          e = time.time()
+    finally:
+      if do_record:
+        if dns and dns.header.rcode == SERVFAIL:
+          logger.warn('%s: server failed', self)
+          self.failed_times += 1
+        self.record_time(e-s)
 
     return ans, dns
 
   @asyncio.coroutine
   def recv_answer(self, req):
-    loop = self.loop
-    fu = asyncio.Future(loop=loop)
+    fu = asyncio.Future(loop=self.loop)
     id = req.header.id
     self._id_dict[id] = fu
-    s = time.time()
     try:
-      yield from asyncio.wait_for(fu, self.timeout, loop=loop)
-      e = time.time()
-      self.record_time(e-s)
+      return (yield from fu)
+    finally:
       try:
         del self._id_dict[id]
       except KeyError:
         pass
-      return fu.result()
-    except asyncio.TimeoutError:
-      fu = asyncio.async(asyncio.wait_for(fu, 10, loop=loop))
-      fu.add_done_callback(partial(self.late_answer, id, s))
-      raise
-
-  def late_answer(self, fu, id, s):
-      e = time.time()
-      self.record_time(e-s)
-      try:
-        del self._id_dict[id]
-      except KeyError:
-        pass
-      fu.result()
 
   def on_answer(self):
     co = self.handle_response()
-    fu = asyncio.Task(co, loop=self.loop)
+    fu = asyncio.async(co, loop=self.loop)
     fu.add_done_callback(lambda fu: fu.result())
 
   @asyncio.coroutine
@@ -370,6 +397,7 @@ class DNSClient(DNSCommon):
     self._stat.add(t * 1000)
 
   def __repr__(self):
+    # TODO: use signal handler to show stats
     try:
       return '<%s [%s] (count/avg/mdev: %d/%.1f/%.1f)>' % (
         self.__class__.__name__,
@@ -409,6 +437,7 @@ def main():
       s, config['primary_upstreams'], config['secondary_upstreams'],
       primary_timeout = config['primary_timeout'],
       secondary_timeout = config['secondary_timeout'],
+      concurrent_delay = config['concurrent_delay'],
     ) for s in config['servers']]
   logging.info('serving on %r.', config['servers'])
   i = config['bogus_nxdomain_check_interval']
@@ -435,8 +464,7 @@ if __name__ == '__main__':
       '93.46.8.89',
     },
     'bogus_ips': set(),
-    # TODO: implemenet this
-    'query_method': 'failover', # or 'concurrent',
+    'concurrent_delay': 0.15,
   }
   try:
     main()
