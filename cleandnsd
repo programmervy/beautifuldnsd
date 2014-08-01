@@ -220,7 +220,6 @@ class UDPDNSServer(DNSCommon):
         futures, loop=self.loop,
         timeout = concurrent_delay,
         return_when=asyncio.FIRST_COMPLETED)
-      print(done, pending)
 
       if no_more and not done:
         failed = True
