@@ -137,6 +137,7 @@ class ConnectionClosedError(ConnectionError):
 
 class DNSCommon:
   sock = None
+  failed_times = 0
 
   @property
   def _stat(self):
@@ -166,6 +167,12 @@ class DNSCommon:
 
   def record_time(self, t):
     self._stat.add(t * 1000)
+
+  def log_stat(self):
+    logger.info('%s: count/avg/mdev/failed: %d/%.1f/%.1f/%d',
+                self,
+                self._stat.n, self._stat.avg, self._stat.mdev,
+                self.failed_times)
 
 class UDPDNSServer(DNSCommon):
   sock = None
@@ -203,7 +210,7 @@ class UDPDNSServer(DNSCommon):
   def handle_request(self):
     s = self.sock
     try:
-      data, addr = s.recvfrom(2048)
+      data, addr = s.recvfrom(4096)
     except BlockingIOError:
       return
 
@@ -281,20 +288,16 @@ class UDPDNSServer(DNSCommon):
 
     s.sendto(ans, addr)
     end = time.time()
+    if failed:
+      self.failed_times += 1
     self.record_time(end - start)
     for fu in futures:
       fu.add_done_callback(catch_timeout)
-
-  def log_stat(self):
-    logger.info('%s: count/avg/mdev: %d/%.1f/%.1f',
-                self,
-                self._stat.n, self._stat.avg, self._stat.mdev)
 
 class DNSClient(DNSCommon):
   sock = None
   connecting = None
   filters = ()
-  failed_times = 0
 
   def __new__(cls, address, type=socket.SOCK_DGRAM,
                *, timeout=3, loop=None):
@@ -412,7 +415,12 @@ class DNSClient(DNSCommon):
     ans = yield from self.recv_data()
     # recv_data (sock_recv) will overwrite the reader
     self.watch_answers()
-    dns = dnslib.DNSRecord.parse(ans)
+    try:
+      dns = dnslib.DNSRecord.parse(ans)
+    except dnslib.dns.DNSError:
+      # TODO
+      print(ans)
+      raise
 
     try:
       fu = self._id_dict[dns.header.id]
@@ -432,19 +440,13 @@ class DNSClient(DNSCommon):
         return
     fu.set_result((ans, dns))
 
-  def log_stat(self):
-    logger.info('%s: count/avg/mdev/failed: %d/%.1f/%.1f/%d',
-                self,
-                self._stat.n, self._stat.avg, self._stat.mdev,
-                self.failed_times)
-
 class UDPDNSClient(DNSClient):
   def prepare_request(self, request):
     return request.pack()
 
   @asyncio.coroutine
   def recv_data(self):
-    ans = yield from self.loop.sock_recv(self.sock, 2048)
+    ans = yield from self.loop.sock_recv(self.sock, 4096)
     return ans
 
 class TCPDNSClient(DNSClient):
@@ -496,8 +498,8 @@ if __name__ == '__main__':
     'servers': [('127.0.0.1', 5353), ('::1', 5353)],
     'primary_upstreams': [DNSClient(('218.104.111.114', 53))],
     'secondary_upstreams': [DNSClient(('8.8.8.8', 53))],
-    'primary_timeout': 5,
-    'secondary_timeout': 5,
+    'primary_timeout': 10,
+    'secondary_timeout': 10,
     'bogus_nxdomain_check_interval': 7200, # every two hour
     'filtered_ips': {
       '159.106.121.75', '159.24.3.173', '202.106.1.2', '202.181.7.85',
