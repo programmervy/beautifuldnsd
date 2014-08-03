@@ -13,11 +13,10 @@ import logging
 import asyncio
 import socket
 import ipaddress
-from itertools import chain
+from itertools import chain, zip_longest
 import struct
 import time
 import signal
-from fractions import gcd
 
 import dnslib
 
@@ -192,13 +191,8 @@ class UDPDNSServer(DNSCommon):
       self.upstreams = tuple(chain(
         self.primary_upstreams, self.secondary_upstreams))
     else:
-      a = len(primary_upstreams)
-      b = len(secondary_upstreams)
-      lcm = a * b // gcd(a, b)
-      self.upstreams = tuple(chain.from_iterable(zip(
-        primary_upstreams * (lcm // a),
-        secondary_upstreams * (lcm // b),
-      )))
+      self.upstreams = tuple(chain.from_iterable(zip_longest(
+        primary_upstreams, secondary_upstreams)))
     self.concurrent_delay = concurrent_delay
     for c in primary_upstreams:
       c.filters = (filter_badip_switch,)
@@ -242,6 +236,8 @@ class UDPDNSServer(DNSCommon):
       try:
         while True:
           server = next(it)
+          if server is None:
+            continue
           if not no_primary or server not in self.primary_upstreams:
             break
         logger.debug('%s: trying server %s', self, server)
