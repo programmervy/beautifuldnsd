@@ -237,7 +237,7 @@ class UDPDNSServer(DNSCommon):
     no_primary = False
     concurrent_delay = self.concurrent_delay
     it = iter(self.upstreams)
-    futures = []
+    futures = {}
     while True:
       try:
         while True:
@@ -246,7 +246,7 @@ class UDPDNSServer(DNSCommon):
             break
         logger.debug('%s: trying server %s', self, server)
         fu = asyncio.async(server.query(request))
-        futures.append(fu)
+        futures[fu] = server
       except StopIteration:
         concurrent_delay = None
         no_more = True
@@ -255,7 +255,7 @@ class UDPDNSServer(DNSCommon):
           break
 
       done, pending = yield from asyncio.wait(
-        futures, loop=self.loop,
+        futures.keys(), loop=self.loop,
         timeout = concurrent_delay,
         return_when=asyncio.FIRST_COMPLETED)
 
@@ -265,12 +265,13 @@ class UDPDNSServer(DNSCommon):
 
       got_it = False
       for fu in done:
-        futures.remove(fu)
+        server = futures.pop(fu)
         ex = fu.exception()
         if ex is None:
           ans, parsed = fu.result()
           if parsed.header.rcode == SERVFAIL:
             continue
+          server.wins += 1
           got_it = True
           break
         elif isinstance(ex, SwitchServer):
@@ -305,6 +306,8 @@ class DNSClient(DNSCommon):
   sock = None
   connecting = None
   filters = ()
+  timeouts = 0
+  wins = 0
 
   def __new__(cls, address, type=socket.SOCK_DGRAM,
                *, timeout=3, loop=None):
@@ -374,6 +377,7 @@ class DNSClient(DNSCommon):
           self.connect()
         except asyncio.TimeoutError:
           logger.warn('%s: timed out', self)
+          self.timeouts += 1
           # propagate further
           raise
         except OSError as e:
@@ -447,6 +451,13 @@ class DNSClient(DNSCommon):
         return
     fu.set_result((ans, dns))
 
+  def log_stat(self):
+    logger.info('%s: count/avg/mdev/win/timeout/failed: %d/%.1f/%.1f/%d/%d/%d',
+                self,
+                self._stat.n, self._stat.avg, self._stat.mdev,
+                self.wins, self.timeouts, self.failed_times,
+               )
+
 class UDPDNSClient(DNSClient):
   def prepare_request(self, request):
     return request.pack()
@@ -502,7 +513,7 @@ if __name__ == '__main__':
   # TODO: read config from command line
   # TODO: parse config file
   config = {
-    'servers': [('127.0.0.1', 5353), ('::1', 5353)],
+    'servers': [('127.0.0.1', 5353)],
     'primary_upstreams': [DNSClient(('218.104.111.114', 53)), DNSClient(('218.104.111.122', 53))],
     'secondary_upstreams': [DNSClient(('8.8.8.8', 53))],
     'primary_timeout': 10,
