@@ -100,31 +100,34 @@ def is_bogus_nxdomain(dns):
      str(dns.a.rdata) in config['bogus_ips']:
     return True
 
-@asyncio.coroutine
 def get_bogus_nxdomain(interval):
+  for client in config['primary_upstreams']:
+    asyncio.async(get_bogus_nxdomain_one(client, interval))
+
+@asyncio.coroutine
+def get_bogus_nxdomain_one(client, interval):
   while True:
     interval_ = interval
     r = base64.b64encode(os.urandom(24)).decode('ascii')
     nxdomain = r.replace('/', '').replace('+', '') + '.com'
     req = dnslib.DNSRecord.question(nxdomain)
-    for client in config['primary_upstreams']:
-      try:
-        ans, parsed = yield from client.query(req)
-      except Exception as e:
-        logger.debug('%r while discovering bogus IP. Will try later.', e)
-        interval_ = 2
-        continue
+    try:
+      ans, parsed = yield from client.query(req)
+    except Exception as e:
+      logger.debug('%r while discovering bogus IP. Will try later.', e)
+      interval_ = 2
+      continue
 
-      if parsed.header.rcode == SERVFAIL:
-        logger.debug('SERVFAIL while discovering bogus IP. Will try later.')
-        interval_ = 2
-        continue
-      if isinstance(parsed.a.rdata, dnslib.A):
-        ip = str(parsed.a.rdata)
-        logger.info('got bogus nxdomain: %s', ip)
-        config['bogus_ips'].add(ip)
-      else:
-        logger.debug('no bogus nxdomain found:\n%s', parsed)
+    if parsed.header.rcode == SERVFAIL:
+      logger.debug('SERVFAIL while discovering bogus IP. Will try later.')
+      interval_ = 2
+      continue
+    if isinstance(parsed.a.rdata, dnslib.A):
+      ip = str(parsed.a.rdata)
+      logger.info('got bogus nxdomain: %s', ip)
+      config['bogus_ips'].add(ip)
+    else:
+      logger.debug('no bogus nxdomain found:\n%s', parsed)
     yield from asyncio.sleep(interval_)
 
 def catch_timeout(fu):
@@ -500,7 +503,7 @@ def main():
   signal.signal(signal.SIGUSR1, show_stats)
   logging.info('serving on %r.', config['servers'])
   i = config['bogus_nxdomain_check_interval']
-  asyncio.async(get_bogus_nxdomain(i))
+  get_bogus_nxdomain(i)
   loop.run_forever()
 
 if __name__ == '__main__':
