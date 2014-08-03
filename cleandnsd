@@ -17,6 +17,7 @@ from itertools import chain
 import struct
 import time
 import signal
+from fractions import gcd
 
 import dnslib
 
@@ -187,6 +188,17 @@ class UDPDNSServer(DNSCommon):
     self.loop = loop = loop or asyncio.get_event_loop()
     self.primary_upstreams = primary_upstreams
     self.secondary_upstreams = secondary_upstreams
+    if concurrent_delay is None:
+      self.upstreams = tuple(chain(
+        self.primary_upstreams, self.secondary_upstreams))
+    else:
+      a = len(primary_upstreams)
+      b = len(secondary_upstreams)
+      lcm = a * b // gcd(a, b)
+      self.upstreams = tuple(chain.from_iterable(zip(
+        primary_upstreams * (lcm // a),
+        secondary_upstreams * (lcm // b),
+      )))
     self.concurrent_delay = concurrent_delay
     for c in primary_upstreams:
       c.filters = (filter_badip_switch,)
@@ -224,13 +236,7 @@ class UDPDNSServer(DNSCommon):
     failed = False
     no_primary = False
     concurrent_delay = self.concurrent_delay
-    if concurrent_delay is None:
-      # try one by one
-      it = chain(self.primary_upstreams, self.secondary_upstreams)
-    else:
-      # try crossingly
-      it = chain.from_iterable(
-        zip(self.primary_upstreams, self.secondary_upstreams))
+    it = iter(self.upstreams)
     futures = []
     while True:
       try:
@@ -497,7 +503,7 @@ if __name__ == '__main__':
   # TODO: parse config file
   config = {
     'servers': [('127.0.0.1', 5353), ('::1', 5353)],
-    'primary_upstreams': [DNSClient(('218.104.111.114', 53))],
+    'primary_upstreams': [DNSClient(('218.104.111.114', 53)), DNSClient(('218.104.111.122', 53))],
     'secondary_upstreams': [DNSClient(('8.8.8.8', 53))],
     'primary_timeout': 10,
     'secondary_timeout': 10,
