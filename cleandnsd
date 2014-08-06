@@ -529,7 +529,19 @@ if __name__ == '__main__':
     'bogus_ips': set(),
     'concurrent_delay': 0.15,
   }
+
+  import tracemalloc
+  tracemalloc.start(25)
+
   try:
     main()
   except KeyboardInterrupt:
     pass
+
+  show_stats(None, None)
+
+  snapshot = tracemalloc.take_snapshot()
+  top_stats = snapshot.statistics('lineno')
+  print("[ Top 10 ]")
+  for stat in top_stats[:10]:
+      print(stat)
