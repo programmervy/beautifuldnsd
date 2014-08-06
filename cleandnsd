@@ -106,8 +106,9 @@ def get_bogus_nxdomain(interval):
 
 @asyncio.coroutine
 def get_bogus_nxdomain_one(client, interval):
+  interval_ = 0
   while True:
-    interval_ = interval
+    yield from asyncio.sleep(interval_)
     r = base64.b64encode(os.urandom(24)).decode('ascii')
     nxdomain = r.replace('/', '').replace('+', '') + '.com'
     req = dnslib.DNSRecord.question(nxdomain)
@@ -128,7 +129,7 @@ def get_bogus_nxdomain_one(client, interval):
       config['bogus_ips'].add(ip)
     else:
       logger.debug('no bogus nxdomain found:\n%s', parsed)
-    yield from asyncio.sleep(interval_)
+    interval_ = interval
 
 def catch_timeout(fu):
   try:
