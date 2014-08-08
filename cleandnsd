@@ -86,7 +86,7 @@ def reply_with(request, rcode):
 def filter_badip(dns):
   for ans in dns.rr:
     if isinstance(ans.rdata, dnslib.A) and \
-       str(dns.a.rdata) in config['filtered_ips']:
+       str(ans.rdata) in config['filtered_ips']:
       return 'skip'
 
 def filter_badip_switch(dns):
