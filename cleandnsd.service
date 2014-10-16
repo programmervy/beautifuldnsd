@@ -1,0 +1,13 @@
+[Unit]
+Description=Cleaned DNS Service
+After=network.target
+
+[Service]
+Type=simple
+SyslogFacility=local0
+KillSignal=SIGINT
+User=nobody
+ExecStart=/usr/local/sbin/cleandnsd
+
+[Install]
+WantedBy=multi-user.target
