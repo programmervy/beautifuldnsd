@@ -360,7 +360,7 @@ class UDPDNSServer(DNSCommon):
           if parsed.header.rcode == SERVFAIL:
             continue
           server.wins += 1
-          logger.info('%s: %s', self, parsed.a)
+          logger.info('%s: %r', self, parsed.a)
           got_it = True
           break
         elif isinstance(ex, SwitchServer):
