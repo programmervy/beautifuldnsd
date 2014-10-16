@@ -6,6 +6,23 @@
 # <UDPDNSClient [UDP:218.104.111.114:53]>: count/avg/mdev/failed: 1108/236.9/516.6/193
 # <UDPDNSClient [UDP:8.8.8.8:53]>: count/avg/mdev/failed: 610/667.8/837.8/7
 
+# <UDPDNSServer [UDP:127.0.0.1:53535]>: count/avg/mdev/failed: 33461/322.6/1459.3/702
+# <UDPDNSClient [UDP:202.106.0.20:53]>: count/avg/mdev/win/timeout/failed: 34059/438.6/1771.9/30665/1098/169
+# <UDPDNSClient [UDP:192.168.1.1:53]>: count/avg/mdev/win/timeout/failed: 4115/2319.5/3826.5/1210/792/0
+# <UDPDNSClient [UDP:8.8.8.8:53]>: count/avg/mdev/win/timeout/failed: 7203/2458.6/3843.1/884/1461/15
+
+# <UDPDNSServer [UDP:127.0.0.1:53535]>: count/avg/mdev/failed: 5610/227.3/707.7/119
+# <UDPDNSClient [UDP:202.106.0.20:53]>: count/avg/mdev/win/timeout/failed: 5683/623.2/2040.1/4577/248/46
+# <UDPDNSClient [UDP:192.168.1.1:53]>: count/avg/mdev/win/timeout/failed: 1311/969.3/2065.3/305/56/0
+# <UDPDNSClient [UDP:8.8.8.8:53]>: count/avg/mdev/win/timeout/failed: 1968/907.5/2067.0/582/93/2
+# <UDPDNSClient [UDP:4.2.2.2:53]>: count/avg/mdev/win/timeout/failed: 700/2217.6/3566.9/27/119/0
+
+# <UDPDNSServer [UDP:127.0.0.1:53535]>: count/avg/mdev/failed: 17505/195.3/807.2/219
+# <UDPDNSClient [UDP:202.106.0.20:53]>: count/avg/mdev/win/timeout/failed: 17809/487.4/1804.2/15491/585/108
+# <UDPDNSClient [UDP:192.168.1.1:53]>: count/avg/mdev/win/timeout/failed: 3025/1584.8/2983.7/777/297/0
+# <UDPDNSClient [UDP:8.8.8.8:53]>: count/avg/mdev/win/timeout/failed: 4534/3087.2/139077.5/953/256/63
+# <UDPDNSClient [UDP:4.2.2.2:53]>: count/avg/mdev/win/timeout/failed: 1032/2153.1/3557.1/65/168/0
+
 import sys
 import os
 import base64
@@ -20,10 +37,76 @@ import signal
 
 import dnslib
 
-from stats import Stat
+# from stats.py begin
+import math
+
+NaN = float('NaN')
+
+class Stat:
+  '''A class that accepts numbers and provides stats info.
+
+  Available properties are:
+  - n: number of numbers that have been added
+  - sum: sum
+  - avg: average or raise ZeroDivisionError if nothing has been added yet
+  - min: mimimum or None if nothing has been added yet
+  - max: maximum or None if nothing has been added yet
+  - mdev: standard deviation or raise ZeroDivisionError if nothing has been added yet
+  - sum2: square sum
+  '''
+  n = 0
+  sum = 0
+  sum2 = 0
+  min = max = None
+
+  @property
+  def avg(self):
+    '''average or 0'''
+    try:
+      return self.sum / self.n
+    except ZeroDivisionError:
+      return NaN
+
+  @property
+  def mdev(self):
+    '''standard deviation or raise ZeroDivisionError if nothing has been added yet'''
+    try:
+      return math.sqrt(self.sum2 / self.n - self.avg ** 2)
+    except ZeroDivisionError:
+      return NaN
+
+  def add(self, x):
+    '''add a number to stats'''
+    self.n += 1
+    self.sum += x
+    self.sum2 += x ** 2
+    if self.min is None:
+      self.min = self.max = x
+    else:
+      if x < self.min:
+        self.min = x
+      elif x > self.max:
+        self.max = x
+
+  def __str__(self):
+    avg = self.avg
+    mdev = self.mdev
+    min = self.min
+    max = self.max
+    return 'min/avg/max/mdev = %.3f/%.3f/%.3f/%.3f' % (min, avg, max, mdev)
+
+  def __repr__(self):
+    return '<%s.%s: %s>' % (
+      self.__class__.__module__,
+      self.__class__.__name__,
+      self.__str__(),
+    )
+# from stats.py end
 
 logger = logging.getLogger('cleandnsd')
 # TODO: handle truncated reply
+# TODO: command to re-discover bogus IP, add/remove servers
+# TODO: save last bogus IPs
 SERVFAIL = dnslib.RCODE.SERVFAIL
 
 class SwitchServer(Exception): pass
@@ -88,6 +171,11 @@ def filter_badip(dns):
     if isinstance(ans.rdata, dnslib.A) and \
        str(ans.rdata) in config['filtered_ips']:
       return 'skip'
+    # TODO: should be better naming
+    # 北京长城宽带
+    if isinstance(ans.rdata, dnslib.PTR) and \
+       str(ans.rdata) == 'localhost.':
+      return 'skip'
 
 def filter_badip_switch(dns):
   r = filter_badip(dns)
@@ -116,12 +204,12 @@ def get_bogus_nxdomain_one(client, interval):
       ans, parsed = yield from client.query(req)
     except Exception as e:
       logger.debug('%r while discovering bogus IP. Will try later.', e)
-      interval_ = 2
+      interval_ = 10
       continue
 
     if parsed.header.rcode == SERVFAIL:
       logger.debug('SERVFAIL while discovering bogus IP. Will try later.')
-      interval_ = 2
+      interval_ = 10
       continue
     if isinstance(parsed.a.rdata, dnslib.A):
       ip = str(parsed.a.rdata)
@@ -227,7 +315,7 @@ class UDPDNSServer(DNSCommon):
 
     start = time.time()
     request = dnslib.DNSRecord.parse(data)
-    logger.info('%r request record %s of %s', addr,
+    logger.info('%r request for %s of %s', addr,
                 dnslib.QTYPE[request.q.qtype], request.q.qname)
 
     no_more = False
@@ -272,6 +360,7 @@ class UDPDNSServer(DNSCommon):
           if parsed.header.rcode == SERVFAIL:
             continue
           server.wins += 1
+          logger.info('%s: %s', self, parsed.a)
           got_it = True
           break
         elif isinstance(ex, SwitchServer):
@@ -376,7 +465,7 @@ class DNSClient(DNSCommon):
           logger.warn('%s: connection error, reconnecting', self, exc_info=True)
           self.connect()
         except asyncio.TimeoutError:
-          logger.warn('%s: timed out', self)
+          logger.warn('%s: timed out for %s', self, request.q)
           self.timeouts += 1
           # propagate further
           raise
@@ -513,12 +602,14 @@ if __name__ == '__main__':
   # TODO: read config from command line
   # TODO: parse config file
   config = {
-    'servers': [('127.0.0.1', 5353)],
-    'primary_upstreams': [DNSClient(('218.104.111.114', 53)), DNSClient(('218.104.111.122', 53))],
-    'secondary_upstreams': [DNSClient(('8.8.8.8', 53))],
+    'servers': [('127.0.0.1', 53535)],
+    'primary_upstreams': [DNSClient(('202.106.0.20', 53)), DNSClient(('192.168.1.1', 53))],
+    # Wuhan Unicom 3G
+    # 'primary_upstreams': [DNSClient(('218.104.111.114', 53)), DNSClient(('218.104.111.122', 53))],
+    'secondary_upstreams': [DNSClient(('8.8.8.8', 53)), DNSClient(('4.2.2.2', 53))],
     'primary_timeout': 10,
     'secondary_timeout': 10,
-    'bogus_nxdomain_check_interval': 7200, # every two hour
+    'bogus_nxdomain_check_interval': 600,
     'filtered_ips': {
       '159.106.121.75', '159.24.3.173', '202.106.1.2', '202.181.7.85',
       '203.161.230.171', '203.98.7.65', '209.145.54.50', '216.234.179.13',
