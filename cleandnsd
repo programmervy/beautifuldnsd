@@ -465,7 +465,8 @@ class DNSClient(DNSCommon):
           logger.warn('%s: connection error, reconnecting', self, exc_info=True)
           self.connect()
         except asyncio.TimeoutError:
-          logger.warn('%s: timed out for %s', self, request.q)
+          logger.warn('%s: timed out for %s of %s', self,
+                      dnslib.QTYPE[request.q.qtype], request.q.qname)
           self.timeouts += 1
           # propagate further
           raise
