@@ -23,6 +23,12 @@
 # <UDPDNSClient [UDP:8.8.8.8:53]>: count/avg/mdev/win/timeout/failed: 4534/3087.2/139077.5/953/256/63
 # <UDPDNSClient [UDP:4.2.2.2:53]>: count/avg/mdev/win/timeout/failed: 1032/2153.1/3557.1/65/168/0
 
+# <UDPDNSServer [UDP:127.0.0.1:53535]>: count/avg/mdev/failed: 59828/337.3/1210.0/986
+# <UDPDNSClient [UDP:202.106.0.20:53]>: count/avg/mdev/win/timeout/failed: 61454/3137.1/261927.7/49926/5693/1075
+# <UDPDNSClient [UDP:192.168.1.1:53]>: count/avg/mdev/win/timeout/failed: 14455/2839.4/57274.5/3683/2689/0
+# <UDPDNSClient [UDP:8.8.8.8:53]>: count/avg/mdev/win/timeout/failed: 20760/2314.5/3710.8/4520/3865/110
+# <UDPDNSClient [UDP:4.2.2.2:53]>: count/avg/mdev/win/timeout/failed: 7392/3215.4/4149.1/713/1985/19
+
 import sys
 import os
 import base64
@@ -536,7 +542,7 @@ class DNSClient(DNSCommon):
         logger.warn('%s: skipping filtered answer:\n%s', self, dns.rr)
         return
       elif action == 'switch':
-        logger.warn('%s: bad IP. switching to secondary_upstreams.', self)
+        logger.warn('%s: bad IP for %s. switching to secondary_upstreams.', self, dns.rr)
         fu.set_exception(SwitchServer('IP is poisoned'))
         return
     fu.set_result((ans, dns))
