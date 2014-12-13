@@ -7,7 +7,7 @@ Type=simple
 SyslogFacility=local0
 KillSignal=SIGINT
 User=nobody
-ExecStart=/usr/local/sbin/cleandnsd
+ExecStart=/usr/local/sbin/beautifuldnsd
 
 [Install]
 WantedBy=multi-user.target

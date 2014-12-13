@@ -109,7 +109,7 @@ class Stat:
     )
 # from stats.py end
 
-logger = logging.getLogger('cleandnsd')
+logger = logging.getLogger('beautifuldnsd')
 # TODO: handle truncated reply
 # TODO: command to re-discover bogus IP, add/remove servers
 # TODO: save last bogus IPs
@@ -583,7 +583,7 @@ def show_stats(signo, frame):
 def main():
   try:
     import setproctitle
-    setproctitle.setproctitle('cleandnsd')
+    setproctitle.setproctitle('beautifuldnsd')
     del setproctitle
   except ImportError:
     pass
