@@ -36,10 +36,12 @@ import logging
 import asyncio
 import socket
 import ipaddress
-from itertools import chain, zip_longest
 import struct
 import time
 import signal
+from functools import partial
+import dbm
+import shelve
 
 import dnslib
 import yaml
@@ -122,6 +124,10 @@ logger = logging.getLogger('beautifuldnsd')
 # TODO: handle truncated reply
 # TODO: command to re-discover bogus IP, add/remove servers
 SERVFAIL = dnslib.RCODE.SERVFAIL
+BOGUS_IPS = None
+BOGUS_IPS_DB = None
+POLLUTION_IPS = None
+POLLUTED_DOMAINS = None
 
 class SwitchServer(Exception): pass
 
@@ -180,31 +186,26 @@ def reply_with(request, rcode):
   ans.header.rcode = rcode
   return ans.pack()
 
-def filter_badip(dns):
+def is_polluted_answer(dns):
   for ans in dns.rr:
     if isinstance(ans.rdata, dnslib.A) and \
-       str(ans.rdata) in config['filtered_ips']:
-      return 'skip'
-    # TODO: should be better naming
-    # 北京长城宽带
+       str(ans.rdata) in POLLUTION_IPS:
+      return True
+    # 北京
     if isinstance(ans.rdata, dnslib.PTR) and \
        str(ans.rdata) == 'localhost.':
-      return 'skip'
+      return True
+    else:
+      return False
 
-def filter_badip_switch(dns):
-  r = filter_badip(dns)
-  if r == 'skip':
-    r = 'switch'
-  return r
+def is_polluted_domain(dns):
+  key = str(dns.q.qname).encode('latin1')
+  return key in POLLUTED_DOMAINS
 
 def is_bogus_nxdomain(dns):
   if isinstance(dns.a.rdata, dnslib.A) and \
-     str(dns.a.rdata) in config['bogus_ips']:
+     str(dns.a.rdata) in BOGUS_IPS:
     return True
-
-def get_bogus_nxdomain(interval):
-  for client in config['primary_upstreams']:
-    asyncio.async(get_bogus_nxdomain_one(client, interval))
 
 @asyncio.coroutine
 def get_bogus_nxdomain_one(client, interval):
@@ -228,7 +229,8 @@ def get_bogus_nxdomain_one(client, interval):
     if isinstance(parsed.a.rdata, dnslib.A):
       ip = str(parsed.a.rdata)
       logger.info('got bogus nxdomain: %s', ip)
-      config['bogus_ips'].add(ip)
+      BOGUS_IPS.add(ip)
+      BOGUS_IPS_DB[ip] = time.time()
     else:
       logger.debug('no bogus nxdomain found:\n%s', parsed)
     interval_ = interval
@@ -285,27 +287,12 @@ class UDPDNSServer(DNSCommon):
   sock = None
   type = socket.SOCK_DGRAM
 
-  def __init__(self, address,
-               primary_upstreams, secondary_upstreams,
-               *, loop=None, concurrent_delay = None,
-               primary_timeout = 3, secondary_timeout = 3):
+  def __init__(self, address, upstreams,
+               *, loop=None, concurrent_delay=None):
     self.address = address
     self.loop = loop = loop or asyncio.get_event_loop()
-    self.primary_upstreams = primary_upstreams
-    self.secondary_upstreams = secondary_upstreams
-    if concurrent_delay is None:
-      self.upstreams = tuple(chain(
-        self.primary_upstreams, self.secondary_upstreams))
-    else:
-      self.upstreams = tuple(chain.from_iterable(zip_longest(
-        primary_upstreams, secondary_upstreams)))
+    self.upstreams = upstreams
     self.concurrent_delay = concurrent_delay
-    for c in primary_upstreams:
-      c.filters = (filter_badip_switch,)
-      c.timeout = primary_timeout
-    for c in secondary_upstreams:
-      c.filters = (filter_badip,)
-      c.timeout = secondary_timeout
 
     self.sock = s = socket.socket(
       ip_family(address[0]), socket.SOCK_DGRAM)
@@ -334,7 +321,7 @@ class UDPDNSServer(DNSCommon):
 
     no_more = False
     failed = False
-    no_primary = False
+    skipping = is_polluted_domain(request)
     concurrent_delay = self.concurrent_delay
     it = iter(self.upstreams)
     futures = {}
@@ -344,10 +331,10 @@ class UDPDNSServer(DNSCommon):
           server = next(it)
           if server is None:
             continue
-          if not no_primary or server not in self.primary_upstreams:
+          if not skipping or server.on_pollution == 'skip':
             break
         logger.debug('%s: trying server %s', self, server)
-        fu = asyncio.async(server.query(request))
+        fu = asyncio.async(server.query(request), loop=self.loop)
         futures[fu] = server
       except StopIteration:
         concurrent_delay = None
@@ -378,7 +365,7 @@ class UDPDNSServer(DNSCommon):
           got_it = True
           break
         elif isinstance(ex, SwitchServer):
-          no_primary = True
+          skipping = True
         elif isinstance(ex, asyncio.TimeoutError):
           pass
         else:
@@ -408,7 +395,6 @@ class UDPDNSServer(DNSCommon):
 class DNSClient(DNSCommon):
   sock = None
   connecting = None
-  filters = ()
   timeouts = 0
   wins = 0
 
@@ -424,13 +410,26 @@ class DNSClient(DNSCommon):
     return instance
 
   def __init__(self, ip, port=53, proto='udp',
-               *, timeout=10, loop=None):
+               *, timeout=10, on_pollution='skip',
+               discover_bogus_ip=False,
+               discover_interval=600,
+               loop=None):
     self.loop = loop or asyncio.get_event_loop()
     self.timeout = timeout
     self.address = ip, port
     self.type = socket.SOCK_DGRAM if proto == 'udp' else socket.SOCK_STREAM
     self._id_dict = {}
     self.connect()
+    if on_pollution in ('skip', 'switch'):
+      self.on_pollution = on_pollution
+    else:
+      raise ValueError('unknown option %r for on_pollution' % on_pollution)
+    if discover_bogus_ip:
+      self.discover_bogus_ip(discover_interval)
+
+  def discover_bogus_ip(self, interval):
+    asyncio.async(get_bogus_nxdomain_one(self, interval),
+                  loop=self.loop)
 
   def connect(self):
     self.close()
@@ -534,9 +533,8 @@ class DNSClient(DNSCommon):
     try:
       dns = dnslib.DNSRecord.parse(ans)
     except dnslib.dns.DNSError:
-      # TODO
-      print(ans)
-      raise
+      logger.exception('DNS parse error for %r', ans)
+      return
 
     try:
       fu = self._id_dict[dns.header.id]
@@ -545,14 +543,15 @@ class DNSClient(DNSCommon):
       logger.warn('%s: dropping not-requested ans:\n%s', self, dns)
       return
 
-    for f in self.filters:
-      action = f(dns)
-      if action == 'skip':
-        logger.warn('%s: skipping filtered answer:\n%s', self, dns.rr)
+    if is_polluted_answer(dns):
+      POLLUTED_DOMAINS[str(dns.q.qname).encode('latin1')] = b''
+      if self.on_pollution == 'skip':
+        logger.warn('%s: skipping polluted answer:\n%s', self, dns.rr)
         return
-      elif action == 'switch':
-        logger.warn('%s: bad IP for %s. switching to secondary_upstreams.', self, dns.rr)
-        fu.set_exception(SwitchServer('IP is poisoned'))
+      elif self.on_pollution == 'switch':
+        logger.warn('%s: bad answer for %s. switching to next upstream.',
+                    self, dns.rr)
+        fu.set_exception(SwitchServer('bad answer'))
         return
     fu.set_result((ans, dns))
 
@@ -584,10 +583,9 @@ class TCPDNSClient(DNSClient):
     ans = yield from recv_exactly(s, n)
     return ans
 
-def show_stats(signo, frame):
-  for client in chain(servers,
-    config['primary_upstreams'], config['secondary_upstreams']):
-    client.log_stat()
+def show_stats(statables, signo=0, frame=None):
+  for s in statables:
+    s.log_stat()
 
 def main():
   try:
@@ -597,44 +595,48 @@ def main():
   except ImportError:
     pass
 
-  global servers
-  loop = asyncio.get_event_loop()
-  servers = [
-    UDPDNSServer(
-      s, config['primary_upstreams'], config['secondary_upstreams'],
-      primary_timeout = config['primary_timeout'],
-      secondary_timeout = config['secondary_timeout'],
-      concurrent_delay = config['concurrent_delay'],
-    ) for s in config['servers']]
-  signal.signal(signal.SIGUSR1, show_stats)
-  logging.info('serving on %r.', config['servers'])
-  i = config['bogus_nxdomain_check_interval']
-  get_bogus_nxdomain(i)
-  loop.run_forever()
-
-if __name__ == '__main__':
-  # TODO: read config file from command line
-  # TODO: use dbm to save bogus_ips
-  # TODO: use dbm to save polluted_domains
-  config = {
-    'servers': [('127.0.0.1', 53536)],
-    'primary_upstreams': [DNSClient('202.106.0.20', 53), DNSClient('192.168.1.1', 53)],
-    # Wuhan Unicom 3G
-    # 'primary_upstreams': [DNSClient(('218.104.111.114', 53)), DNSClient(('218.104.111.122', 53))],
-    'secondary_upstreams': [DNSClient('8.8.8.8', 53), DNSClient('4.2.2.2', 53)],
-    'primary_timeout': 10,
-    'secondary_timeout': 10,
-    'bogus_nxdomain_check_interval': 600,
-  }
+  global BOGUS_IPS, POLLUTION_IPS, POLLUTED_DOMAINS, BOGUS_IPS_DB
   newconfig = loadyaml(open('beautifuldnsd.yaml'))
-  config['bogus_ips'] = set(newconfig['bogus_ips'])
-  config['concurrent_delay'] = newconfig['misc']['concurrent_delay']
-  config['filtered_ips'] = newconfig['pollution_ips']
+  BOGUS_IPS = set(newconfig['bogus_ips'])
+  POLLUTION_IPS = newconfig['pollution_ips']
+  concurrent_delay = newconfig['misc']['concurrent_delay']
 
   logging.getLogger('asyncio').setLevel(logging.WARN)
   level = newconfig['misc']['logging_level'].upper()
   config_logging(level=level)
 
+  db_dir = newconfig['misc']['db_directory']
+  POLLUTED_DOMAINS = dbm.open(os.path.join(db_dir, 'polluted_domains.db'), 'c')
+  BOGUS_IPS_DB = shelve.open(os.path.join(db_dir, 'bogus_ips.db'), 'c')
+  now = time.time()
+  for ip, last in tuple(BOGUS_IPS_DB.items()):
+    if now - last < 7 * 24 * 3600:
+      BOGUS_IPS.add(ip)
+    else:
+      del BOGUS_IPS_DB[ip]
+  logger.info('bogus IPs: %r', BOGUS_IPS)
+
+  upstreams = [DNSClient(**x) for x in newconfig['upstreams']]
+  servers = [
+    UDPDNSServer(
+      (s['ip'], s['port']),
+      upstreams,
+      concurrent_delay = concurrent_delay,
+    ) for s in newconfig['servers']]
+
+  loop = asyncio.get_event_loop()
+  my_show_stats = partial(show_stats, servers + upstreams)
+  signal.signal(signal.SIGUSR1, my_show_stats)
+  logging.info('serving on %r.', servers)
+  try:
+    loop.run_forever()
+  finally:
+    my_show_stats()
+    BOGUS_IPS_DB.close()
+    POLLUTED_DOMAINS.close()
+
+if __name__ == '__main__':
+  # TODO: read config file from command line
   import tracemalloc
   tracemalloc.start(25)
 
@@ -642,8 +644,6 @@ if __name__ == '__main__':
     main()
   except KeyboardInterrupt:
     pass
-
-  show_stats(None, None)
 
   snapshot = tracemalloc.take_snapshot()
   top_stats = snapshot.statistics('lineno')

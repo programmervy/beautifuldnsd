@@ -1,6 +1,6 @@
 servers:
   - ip: 127.0.0.1
-    port: 53535
+    port: 53536
 
 upstreams:
   - ip: 202.106.0.20
@@ -8,7 +8,7 @@ upstreams:
     on_pollution: switch
     discover_bogus_ip: true
     discover_interval: 600 # seconds
-  - ip: 8.8.8.8,
+  - ip: 8.8.8.8
     on_pollution: skip
   - ip: 192.168.1.1
     on_pollution: switch
@@ -28,6 +28,7 @@ upstreams:
 misc:
   concurrent_delay: 0.15 # seconds
   logging_level: debug
+  db_directory: db
 
 pollution_ips:
   - 159.106.121.75
