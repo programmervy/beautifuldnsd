@@ -595,17 +595,26 @@ def main():
   except ImportError:
     pass
 
+  import argparse
+  parser = argparse.ArgumentParser(description='Quick and clean DNS Proxy')
+  parser.add_argument('-c', '--config', default='/etc/beautifuldnsd.yaml',
+                      type=argparse.FileType(),
+                      help='path to configuration file')
+  parser.add_argument('-d', '--db-dir',
+                      help='database directory, overriding configuration file')
+  args = parser.parse_args()
+
   global BOGUS_IPS, POLLUTION_IPS, POLLUTED_DOMAINS, BOGUS_IPS_DB
-  newconfig = loadyaml(open('beautifuldnsd.yaml'))
-  BOGUS_IPS = set(newconfig['bogus_ips'])
-  POLLUTION_IPS = newconfig['pollution_ips']
-  concurrent_delay = newconfig['misc']['concurrent_delay']
+  config = loadyaml(args.config)
+  BOGUS_IPS = set(config['bogus_ips'])
+  POLLUTION_IPS = config['pollution_ips']
+  concurrent_delay = config['misc']['concurrent_delay']
 
   logging.getLogger('asyncio').setLevel(logging.WARN)
-  level = newconfig['misc']['logging_level'].upper()
+  level = config['misc']['logging_level'].upper()
   config_logging(level=level)
 
-  db_dir = newconfig['misc']['db_directory']
+  db_dir = args.db_dir or config['misc']['db_directory']
   POLLUTED_DOMAINS = dbm.open(os.path.join(db_dir, 'polluted_domains.db'), 'c')
   BOGUS_IPS_DB = shelve.open(os.path.join(db_dir, 'bogus_ips.db'), 'c')
   now = time.time()
@@ -616,13 +625,13 @@ def main():
       del BOGUS_IPS_DB[ip]
   logger.info('bogus IPs: %r', BOGUS_IPS)
 
-  upstreams = [DNSClient(**x) for x in newconfig['upstreams']]
+  upstreams = [DNSClient(**x) for x in config['upstreams']]
   servers = [
     UDPDNSServer(
       (s['ip'], s['port']),
       upstreams,
       concurrent_delay = concurrent_delay,
-    ) for s in newconfig['servers']]
+    ) for s in config['servers']]
 
   loop = asyncio.get_event_loop()
   my_show_stats = partial(show_stats, servers + upstreams)
@@ -636,7 +645,6 @@ def main():
     POLLUTED_DOMAINS.close()
 
 if __name__ == '__main__':
-  # TODO: read config file from command line
   import tracemalloc
   tracemalloc.start(25)
 

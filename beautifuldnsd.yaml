@@ -1,6 +1,6 @@
 servers:
   - ip: 127.0.0.1
-    port: 53536
+    port: 53535
 
 upstreams:
   - ip: 202.106.0.20
@@ -27,7 +27,7 @@ upstreams:
 
 misc:
   concurrent_delay: 0.15 # seconds
-  logging_level: debug
+  logging_level: info
   db_directory: db
 
 pollution_ips:
