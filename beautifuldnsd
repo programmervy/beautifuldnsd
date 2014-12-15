@@ -42,6 +42,15 @@ import time
 import signal
 
 import dnslib
+import yaml
+try:
+  from yaml import CLoader as Loader
+  from yaml import CDumper as Dumper
+except ImportError:
+  from yaml import Loader, Dumper
+
+def loadyaml(src):
+  return yaml.load(src, Loader=Loader)
 
 # from stats.py begin
 import math
@@ -112,7 +121,6 @@ class Stat:
 logger = logging.getLogger('beautifuldnsd')
 # TODO: handle truncated reply
 # TODO: command to re-discover bogus IP, add/remove servers
-# TODO: save last bogus IPs
 SERVFAIL = dnslib.RCODE.SERVFAIL
 
 class SwitchServer(Exception): pass
@@ -404,22 +412,23 @@ class DNSClient(DNSCommon):
   timeouts = 0
   wins = 0
 
-  def __new__(cls, address, type=socket.SOCK_DGRAM,
-               *, timeout=3, loop=None):
-    if type is socket.SOCK_DGRAM:
+  def __new__(cls, *args, proto='udp', **kwargs):
+    if proto == 'udp':
       C = UDPDNSClient
-    else:
+    elif proto == 'tcp':
       C = TCPDNSClient
+    else:
+      raise ValueError('unknown protocol %r' % proto)
 
     instance = super().__new__(C)
     return instance
 
-  def __init__(self, address, type=socket.SOCK_DGRAM,
-               *, timeout=3, loop=None):
+  def __init__(self, ip, port=53, proto='udp',
+               *, timeout=10, loop=None):
     self.loop = loop or asyncio.get_event_loop()
     self.timeout = timeout
-    self.address = address
-    self.type = type
+    self.address = ip, port
+    self.type = socket.SOCK_DGRAM if proto == 'udp' else socket.SOCK_STREAM
     self._id_dict = {}
     self.connect()
 
@@ -604,29 +613,27 @@ def main():
   loop.run_forever()
 
 if __name__ == '__main__':
-  logging.getLogger('asyncio').setLevel(logging.WARN)
-  config_logging(level=logging.DEBUG)
-  # TODO: read config from command line
-  # TODO: parse config file
+  # TODO: read config file from command line
+  # TODO: use dbm to save bogus_ips
+  # TODO: use dbm to save polluted_domains
   config = {
-    'servers': [('127.0.0.1', 53535)],
-    'primary_upstreams': [DNSClient(('202.106.0.20', 53)), DNSClient(('192.168.1.1', 53))],
+    'servers': [('127.0.0.1', 53536)],
+    'primary_upstreams': [DNSClient('202.106.0.20', 53), DNSClient('192.168.1.1', 53)],
     # Wuhan Unicom 3G
     # 'primary_upstreams': [DNSClient(('218.104.111.114', 53)), DNSClient(('218.104.111.122', 53))],
-    'secondary_upstreams': [DNSClient(('8.8.8.8', 53)), DNSClient(('4.2.2.2', 53))],
+    'secondary_upstreams': [DNSClient('8.8.8.8', 53), DNSClient('4.2.2.2', 53)],
     'primary_timeout': 10,
     'secondary_timeout': 10,
     'bogus_nxdomain_check_interval': 600,
-    'filtered_ips': {
-      '159.106.121.75', '159.24.3.173', '202.106.1.2', '202.181.7.85',
-      '203.161.230.171', '203.98.7.65', '209.145.54.50', '216.234.179.13',
-      '243.185.187.39', '37.61.54.158', '4.36.66.178', '46.82.174.68',
-      '59.24.3.173', '64.33.88.161', '78.16.49.15', '8.7.198.45',
-      '93.46.8.89',
-    },
-    'bogus_ips': set(),
-    'concurrent_delay': 0.15,
   }
+  newconfig = loadyaml(open('beautifuldnsd.yaml'))
+  config['bogus_ips'] = set(newconfig['bogus_ips'])
+  config['concurrent_delay'] = newconfig['misc']['concurrent_delay']
+  config['filtered_ips'] = newconfig['pollution_ips']
+
+  logging.getLogger('asyncio').setLevel(logging.WARN)
+  level = newconfig['misc']['logging_level'].upper()
+  config_logging(level=level)
 
   import tracemalloc
   tracemalloc.start(25)
