@@ -1,0 +1,55 @@
+servers:
+  - ip: 127.0.0.1
+    port: 53535
+
+upstreams:
+  - ip: 202.106.0.20
+    port: 53
+    on_pollution: switch
+    discover_bogus_ip: true
+    discover_interval: 600 # seconds
+  - ip: 8.8.8.8
+    on_pollution: skip
+  - ip: 192.168.1.1
+    on_pollution: switch
+    discover_bogus_ip: true
+  - ip: 4.2.2.2
+    on_pollution: skip
+
+  # full default values:
+  #   ip: required
+  #   port: 53
+  #   proto: udp
+  #   timeout: 10 # seconds
+  #   on_pollution: skip
+  #   discover_bogus_ip: false
+  #   discover_interval: 600 # seconds
+
+misc:
+  concurrent_delay: 0.15 # seconds
+  logging_level: info
+  db_directory: db
+
+pollution_ips:
+  - 159.106.121.75
+  - 159.24.3.173
+  - 202.106.1.2
+  - 202.181.7.85
+  - 203.161.230.171
+  - 203.98.7.65
+  - 209.145.54.50
+  - 216.234.179.13
+  - 243.185.187.39
+  - 37.61.54.158
+  - 4.36.66.178
+  - 46.82.174.68
+  - 59.24.3.173
+  - 64.33.88.161
+  - 78.16.49.15
+  - 8.7.198.45
+  - 93.46.8.89
+
+bogus_ips:
+  # manual config here or auto-discover
+  # format see 'pollution_ips'
+  []

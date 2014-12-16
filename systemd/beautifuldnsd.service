@@ -1,0 +1,13 @@
+[Unit]
+Description=Quick and clean DNS Proxy
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/beautifuldnsd -d /var/lib/beautifuldnsd
+KillSignal=SIGINT
+User=beautifuldnsd
+Group=beautifuldnsd
+
+[Install]
+WantedBy=multi-user.target
