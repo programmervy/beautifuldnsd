@@ -1,33 +1,6 @@
 #!/usr/bin/env python3
 
-# Stats:
-# <UDPDNSServer [UDP:127.0.0.1:5353]>: count/avg/mdev: 1086/263.6/257.7
-# <UDPDNSServer [UDP:::1:5353]>: count/avg/mdev: 0/nan/nan
-# <UDPDNSClient [UDP:218.104.111.114:53]>: count/avg/mdev/failed: 1108/236.9/516.6/193
-# <UDPDNSClient [UDP:8.8.8.8:53]>: count/avg/mdev/failed: 610/667.8/837.8/7
-
-# <UDPDNSServer [UDP:127.0.0.1:53535]>: count/avg/mdev/failed: 33461/322.6/1459.3/702
-# <UDPDNSClient [UDP:202.106.0.20:53]>: count/avg/mdev/win/timeout/failed: 34059/438.6/1771.9/30665/1098/169
-# <UDPDNSClient [UDP:192.168.1.1:53]>: count/avg/mdev/win/timeout/failed: 4115/2319.5/3826.5/1210/792/0
-# <UDPDNSClient [UDP:8.8.8.8:53]>: count/avg/mdev/win/timeout/failed: 7203/2458.6/3843.1/884/1461/15
-
-# <UDPDNSServer [UDP:127.0.0.1:53535]>: count/avg/mdev/failed: 5610/227.3/707.7/119
-# <UDPDNSClient [UDP:202.106.0.20:53]>: count/avg/mdev/win/timeout/failed: 5683/623.2/2040.1/4577/248/46
-# <UDPDNSClient [UDP:192.168.1.1:53]>: count/avg/mdev/win/timeout/failed: 1311/969.3/2065.3/305/56/0
-# <UDPDNSClient [UDP:8.8.8.8:53]>: count/avg/mdev/win/timeout/failed: 1968/907.5/2067.0/582/93/2
-# <UDPDNSClient [UDP:4.2.2.2:53]>: count/avg/mdev/win/timeout/failed: 700/2217.6/3566.9/27/119/0
-
-# <UDPDNSServer [UDP:127.0.0.1:53535]>: count/avg/mdev/failed: 17505/195.3/807.2/219
-# <UDPDNSClient [UDP:202.106.0.20:53]>: count/avg/mdev/win/timeout/failed: 17809/487.4/1804.2/15491/585/108
-# <UDPDNSClient [UDP:192.168.1.1:53]>: count/avg/mdev/win/timeout/failed: 3025/1584.8/2983.7/777/297/0
-# <UDPDNSClient [UDP:8.8.8.8:53]>: count/avg/mdev/win/timeout/failed: 4534/3087.2/139077.5/953/256/63
-# <UDPDNSClient [UDP:4.2.2.2:53]>: count/avg/mdev/win/timeout/failed: 1032/2153.1/3557.1/65/168/0
-
-# <UDPDNSServer [UDP:127.0.0.1:53535]>: count/avg/mdev/failed: 59828/337.3/1210.0/986
-# <UDPDNSClient [UDP:202.106.0.20:53]>: count/avg/mdev/win/timeout/failed: 61454/3137.1/261927.7/49926/5693/1075
-# <UDPDNSClient [UDP:192.168.1.1:53]>: count/avg/mdev/win/timeout/failed: 14455/2839.4/57274.5/3683/2689/0
-# <UDPDNSClient [UDP:8.8.8.8:53]>: count/avg/mdev/win/timeout/failed: 20760/2314.5/3710.8/4520/3865/110
-# <UDPDNSClient [UDP:4.2.2.2:53]>: count/avg/mdev/win/timeout/failed: 7392/3215.4/4149.1/713/1985/19
+# FIXME: bug with dig TXT 20120113._domainkey.gmail.com
 
 import sys
 import os
@@ -124,6 +97,7 @@ logger = logging.getLogger('beautifuldnsd')
 # TODO: handle truncated reply
 # TODO: command to re-discover bogus IP, add/remove servers
 SERVFAIL = dnslib.RCODE.SERVFAIL
+NOERROR = dnslib.RCODE.NOERROR
 BOGUS_IPS = None
 BOGUS_IPS_DB = None
 POLLUTION_IPS = None
