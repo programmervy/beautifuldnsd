@@ -1,5 +1,5 @@
 pkgname=beautifuldnsd
-pkgver=0.1
+pkgver=0.2
 pkgrel=1
 pkgdesc="Quick and clean DNS proxy, especially useful for users with poor ISPs"
 arch=('any')
@@ -10,7 +10,7 @@ optdepends=('dnsmasq: DNS cache')
 backup=("etc/${pkgname}.yaml")
 install=beautifuldnsd.install
 source=(${pkgname}-${pkgver}.tar.gz::${url}/archive/v${pkgver}.tar.gz)
-md5sums=('6c888e8b4d40a10de483af7e99f91c6e')
+md5sums=('71361c521ef49c9ba74fdd79172280d4')
 
 package() {
   cd "${srcdir}/${pkgname}-${pkgver}"
