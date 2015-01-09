@@ -23,6 +23,10 @@ try:
   from yaml import CDumper as Dumper
 except ImportError:
   from yaml import Loader, Dumper
+try:
+  import pygeoip
+except ImportError:
+  pygeoip = None
 
 def loadyaml(src):
   return yaml.load(src, Loader=Loader)
@@ -102,8 +106,11 @@ BOGUS_IPS = None
 BOGUS_IPS_DB = None
 POLLUTION_IPS = None
 POLLUTED_DOMAINS = None
+GEOIP = None
 
 class SwitchServer(Exception): pass
+
+class NotChina(Exception): pass
 
 def config_logging(level=logging.WARN, style=None):
   '''
@@ -180,6 +187,17 @@ def is_bogus_nxdomain(dns):
   if isinstance(dns.a.rdata, dnslib.A) and \
      str(dns.a.rdata) in BOGUS_IPS:
     return True
+
+def is_china_ip(dns):
+  if GEOIP is None:
+    return False
+  default = True
+  for ans in dns.rr:
+    if isinstance(ans.rdata, dnslib.A):
+      default = False
+      if GEOIP.country_code_by_addr(str(ans.rdata)) == 'CN':
+        return True
+  return default
 
 @asyncio.coroutine
 def get_bogus_nxdomain_one(client, interval):
@@ -296,6 +314,7 @@ class UDPDNSServer(DNSCommon):
     no_more = False
     failed = False
     skipping = is_polluted_domain(request)
+    notchina = False
     concurrent_delay = self.concurrent_delay
     it = iter(self.upstreams)
     futures = {}
@@ -304,6 +323,8 @@ class UDPDNSServer(DNSCommon):
         while True:
           server = next(it)
           if server is None:
+            continue
+          if notchina and server.china_only:
             continue
           if not skipping or server.on_pollution == 'skip':
             break
@@ -340,6 +361,8 @@ class UDPDNSServer(DNSCommon):
           break
         elif isinstance(ex, SwitchServer):
           skipping = True
+        elif isinstance(ex, NotChina):
+          notchina = True
         elif isinstance(ex, asyncio.TimeoutError):
           pass
         else:
@@ -385,6 +408,7 @@ class DNSClient(DNSCommon):
 
   def __init__(self, ip, port=53, proto='udp',
                *, timeout=10, on_pollution='skip',
+               china_only = False,
                discover_bogus_ip=False,
                discover_interval=600,
                loop=None):
@@ -400,6 +424,7 @@ class DNSClient(DNSCommon):
       raise ValueError('unknown option %r for on_pollution' % on_pollution)
     if discover_bogus_ip:
       self.discover_bogus_ip(discover_interval)
+    self.china_only = china_only
 
   def discover_bogus_ip(self, interval):
     asyncio.async(get_bogus_nxdomain_one(self, interval),
@@ -527,6 +552,11 @@ class DNSClient(DNSCommon):
                     self, dns.rr)
         fu.set_exception(SwitchServer('bad answer'))
         return
+    elif self.china_only and not is_china_ip(dns):
+        logger.warn('%s: non-china IPs for %s. switching to next upstream.',
+                    self, dns.rr)
+        fu.set_exception(NotChina)
+        return
     fu.set_result((ans, dns))
 
   def log_stat(self):
@@ -578,11 +608,13 @@ def main():
                       help='database directory, overriding configuration file')
   args = parser.parse_args()
 
-  global BOGUS_IPS, POLLUTION_IPS, POLLUTED_DOMAINS, BOGUS_IPS_DB
+  global BOGUS_IPS, POLLUTION_IPS, POLLUTED_DOMAINS, BOGUS_IPS_DB, GEOIP
   config = loadyaml(args.config)
   BOGUS_IPS = set(config['bogus_ips'])
   POLLUTION_IPS = config['pollution_ips']
   concurrent_delay = config['misc']['concurrent_delay']
+  if pygeoip and config['misc'].get('geoip_db', False):
+    GEOIP = pygeoip.GeoIP(config['misc']['geoip_db'])
 
   logging.getLogger('asyncio').setLevel(logging.WARN)
   level = config['misc']['logging_level'].upper()

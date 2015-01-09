@@ -12,6 +12,7 @@ upstreams:
     # 遇到 DNS 污染的处理。默认跳过。国内 DNS 服务器请设置为 switch 切换到其它
     # DNS 服务器
     on_pollution: switch
+    china_only: true
     # 是否自动发现针对不存在域名的假的应答。ISP DNS 服务器请设置为 true
     discover_bogus_ip: true
     # 过多久重新发现一次
@@ -22,6 +23,7 @@ upstreams:
   - ip: 192.168.1.1
     on_pollution: switch
     discover_bogus_ip: true
+    china_only: true
   - ip: 4.2.2.2
     on_pollution: skip
 
@@ -31,6 +33,7 @@ upstreams:
   #   proto: udp
   #   timeout: 10 # seconds
   #   on_pollution: skip
+  #   china_only: false
   #   discover_bogus_ip: false
   #   discover_interval: 600 # seconds
 
@@ -40,6 +43,7 @@ misc:
   logging_level: info
   # 用于存储数据的目录。需要写权限。可以使用命令行参数覆盖。
   db_directory: db
+  geoip_db: /usr/share/GeoIP/GeoIP.dat
 
 # 过滤掉 DNS 污染
 # 由于最近一次的 DNS 污染升级，这里列出的 IP 已不完整，已经无法完全防止 DNS 污
