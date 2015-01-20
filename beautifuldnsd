@@ -539,7 +539,7 @@ class DNSClient(DNSCommon):
       fu = self._id_dict[dns.header.id]
     except KeyError:
       # drop unexpected answers
-      logger.warn('%s: dropping not-requested ans:\n%s', self, dns)
+      logger.debug('%s: dropping not-requested ans:\n%s', self, dns)
       return
 
     if is_polluted_answer(dns):
