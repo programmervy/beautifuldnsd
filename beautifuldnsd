@@ -308,8 +308,8 @@ class UDPDNSServer(DNSCommon):
 
     start = time.time()
     request = dnslib.DNSRecord.parse(data)
-    logger.info('%r request for %s of %s', addr,
-                dnslib.QTYPE[request.q.qtype], request.q.qname)
+    logger.debug('%r request for %s of %s', addr,
+                 dnslib.QTYPE[request.q.qtype], request.q.qname)
 
     no_more = False
     failed = False
@@ -356,7 +356,7 @@ class UDPDNSServer(DNSCommon):
           if parsed.header.rcode == SERVFAIL:
             continue
           server.wins += 1
-          logger.info('%s: %r', self, parsed.a)
+          logger.debug('%s: %r', self, parsed.a)
           got_it = True
           break
         elif isinstance(ex, SwitchServer):
@@ -553,7 +553,7 @@ class DNSClient(DNSCommon):
         fu.set_exception(SwitchServer('bad answer'))
         return
     elif self.china_only and not is_china_ip(dns):
-        logger.warn('%s: non-china IPs for %s. switching to next upstream.',
+        logger.debug('%s: non-china IPs for %s. switching to next upstream.',
                     self, dns.rr)
         fu.set_exception(NotChina)
         return
