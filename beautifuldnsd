@@ -149,6 +149,9 @@ def ip_family(ip):
   else:
     raise ValueError('unsupport IP address: %r', a)
 
+def time_as_bytes():
+  return struct.pack('<Q', int(time.time()))
+
 @asyncio.coroutine
 def recv_exactly(sock, n, *, loop=None):
   loop = loop or asyncio.get_event_loop()
@@ -554,7 +557,7 @@ class DNSClient(DNSCommon):
       return
 
     if is_polluted_answer(dns, requireAR=self.requireAR):
-      POLLUTED_DOMAINS[str(dns.q.qname).encode('latin1')] = b''
+      POLLUTED_DOMAINS[str(dns.q.qname).encode('latin1')] = time_as_bytes()
       if self.on_pollution == 'skip':
         logger.warn('%s: skipping polluted answer:\n%s', self, dns.rr)
         return
