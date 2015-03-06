@@ -371,7 +371,7 @@ class UDPDNSServer(DNSCommon):
         break
 
     if failed:
-      logger.warn('%s: all servers failed to reply for %r', self, reques.q)
+      logger.warn('%s: all servers failed to reply for %r', self, request.q)
       ans = reply_with(request, SERVFAIL)
     elif is_bogus_nxdomain(parsed):
       logger.warn('%s: bogus nxdomain, sending back nxdomain to %r',
