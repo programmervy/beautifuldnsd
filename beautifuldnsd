@@ -167,7 +167,16 @@ def reply_with(request, rcode):
   ans.header.rcode = rcode
   return ans.pack()
 
-def is_polluted_answer(dns):
+def is_polluted_answer(dns, *, requireAR=False):
+  if dns.rr and dns.q.qtype != 1 and dns.a.rtype == 1:
+    # asked AAAA, answered A
+    return True
+
+  if requireAR and isinstance(dns.a, dnslib.A) and not dns.ar:
+    # No additional records, but it should have
+    logger.warn('no additional records, skipping: %r', dns.rr)
+    return True
+
   for ans in dns.rr:
     if isinstance(ans.rdata, dnslib.A) and \
        str(ans.rdata) in POLLUTION_IPS:
@@ -424,6 +433,8 @@ class DNSClient(DNSCommon):
       raise ValueError('unknown option %r for on_pollution' % on_pollution)
     if discover_bogus_ip:
       self.discover_bogus_ip(discover_interval)
+    # or we'll add our random domains into db
+    self.requireAR = not discover_bogus_ip
     self.china_only = china_only
 
   def discover_bogus_ip(self, interval):
@@ -542,7 +553,7 @@ class DNSClient(DNSCommon):
       logger.debug('%s: dropping not-requested ans:\n%s', self, dns)
       return
 
-    if is_polluted_answer(dns):
+    if is_polluted_answer(dns, requireAR=self.requireAR):
       POLLUTED_DOMAINS[str(dns.q.qname).encode('latin1')] = b''
       if self.on_pollution == 'skip':
         logger.warn('%s: skipping polluted answer:\n%s', self, dns.rr)
