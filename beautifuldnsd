@@ -242,7 +242,8 @@ def get_bogus_nxdomain_one(client, interval):
 def catch_timeout(fu):
   try:
     fu.result()
-  except (asyncio.TimeoutError, NotChina, SwitchServer, TimeoutError):
+  except (asyncio.TimeoutError, NotChina, SwitchServer, TimeoutError,
+          ConnectionError, BrokenPipeError):
     pass
 
 class ConnectionClosedError(ConnectionError):
@@ -491,6 +492,7 @@ class DNSClient(DNSCommon):
         except (ConnectionError, BrokenPipeError):
           logger.warn('%s: connection error, reconnecting', self, exc_info=True)
           self.connect()
+          raise
         except asyncio.TimeoutError:
           logger.warn('%s: timed out for %s of %s', self,
                       dnslib.QTYPE[request.q.qtype], request.q.qname)
