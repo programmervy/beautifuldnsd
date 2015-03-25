@@ -488,7 +488,7 @@ class DNSClient(DNSCommon):
             self.recv_answer(request),
             timeout = timeleft)
           break
-        except ConnectionError:
+        except (ConnectionError, BrokenPipeError):
           logger.warn('%s: connection error, reconnecting', self, exc_info=True)
           self.connect()
         except asyncio.TimeoutError:
