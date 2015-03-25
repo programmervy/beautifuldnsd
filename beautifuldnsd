@@ -540,7 +540,12 @@ class DNSClient(DNSCommon):
 
   @asyncio.coroutine
   def handle_response(self):
-    ans = yield from self.recv_data()
+    try:
+      ans = yield from self.recv_data()
+    except ConnectionClosedError:
+      self.connect()
+      return
+
     # recv_data (sock_recv) will overwrite the reader
     self.watch_answers()
     try:
