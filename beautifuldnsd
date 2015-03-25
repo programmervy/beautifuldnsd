@@ -407,6 +407,7 @@ class DNSClient(DNSCommon):
   connecting = None
   timeouts = 0
   wins = 0
+  _reconnect_on_timeout = False
 
   def __new__(cls, *args, proto='udp', **kwargs):
     if proto == 'udp':
@@ -497,6 +498,8 @@ class DNSClient(DNSCommon):
           logger.warn('%s: timed out for %s of %s', self,
                       dnslib.QTYPE[request.q.qtype], request.q.qname)
           self.timeouts += 1
+          if self._reconnect_on_timeout:
+            self.connect()
           # propagate further
           raise
         except OSError as e:
@@ -597,6 +600,7 @@ class UDPDNSClient(DNSClient):
     return ans
 
 class TCPDNSClient(DNSClient):
+  _reconnect_on_timeout = True
   def prepare_request(self, request):
     p = request.pack()
     return struct.pack('!H', len(p)) + p
