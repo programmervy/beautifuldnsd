@@ -542,7 +542,7 @@ class DNSClient(DNSCommon):
   def handle_response(self):
     try:
       ans = yield from self.recv_data()
-    except ConnectionClosedError:
+    except (ConnectionClosedError, ConnectionResetError):
       self.connect()
       return
 
