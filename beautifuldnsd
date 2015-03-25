@@ -591,7 +591,8 @@ class UDPDNSClient(DNSClient):
 
 class TCPDNSClient(DNSClient):
   def prepare_request(self, request):
-    return struct.pack('!H', len(request)) + request.pack()
+    p = request.pack()
+    return struct.pack('!H', len(p)) + p
 
   @asyncio.coroutine
   def recv_data(self):
