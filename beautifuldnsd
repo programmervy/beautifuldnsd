@@ -519,7 +519,8 @@ class DNSClient(DNSCommon):
     finally:
       if do_record:
         if dns and dns.header.rcode == SERVFAIL:
-          logger.warn('%s: server failed', self)
+          logger.warn('%s: server failed for %s of %s', self,
+                      dnslib.QTYPE[request.q.qtype], request.q.qname)
           self.failed_times += 1
         self.record_time(e-s)
 
