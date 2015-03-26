@@ -315,7 +315,7 @@ class UDPDNSServer(DNSCommon):
   def handle_request(self):
     s = self.sock
     try:
-      data, addr = s.recvfrom(4096)
+      data, addr = s.recvfrom(40960)
     except BlockingIOError:
       return
 
@@ -601,7 +601,7 @@ class UDPDNSClient(DNSClient):
 
   @asyncio.coroutine
   def recv_data(self):
-    ans = yield from self.loop.sock_recv(self.sock, 4096)
+    ans = yield from self.loop.sock_recv(self.sock, 40960)
     return ans
 
 class TCPDNSClient(DNSClient):
