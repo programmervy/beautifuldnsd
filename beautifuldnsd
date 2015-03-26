@@ -403,6 +403,7 @@ class UDPDNSServer(DNSCommon):
       fu.add_done_callback(catch_timeout)
 
 class DNSClient(DNSCommon):
+  #TODO: connect on demand and catch timeout and close (for TCP)
   sock = None
   connecting = None
   timeouts = 0
@@ -457,6 +458,8 @@ class DNSClient(DNSCommon):
     self.connecting = None
     try:
       fu.result()
+    except TimeoutError:
+      self.connect()
     except OSError as e:
       if e.errno == 101: # Network is unreachable
         logger.error('%s: Network is unreachable', self)
@@ -493,7 +496,8 @@ class DNSClient(DNSCommon):
         except (ConnectionError, BrokenPipeError):
           logger.warn('%s: connection error, reconnecting', self, exc_info=True)
           self.connect()
-          raise
+          yield from self.connecting
+          continue
         except asyncio.TimeoutError:
           logger.warn('%s: timed out for %s of %s', self,
                       dnslib.QTYPE[request.q.qtype], request.q.qname)
