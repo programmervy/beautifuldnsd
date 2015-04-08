@@ -561,7 +561,7 @@ class DNSClient(DNSCommon):
     try:
       dns = dnslib.DNSRecord.parse(ans)
     except dnslib.dns.DNSError:
-      logger.exception('DNS parse error for %r', ans)
+      logger.exception('%s: DNS parse error for %r', self, ans)
       return
 
     try:
