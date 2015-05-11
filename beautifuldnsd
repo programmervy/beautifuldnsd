@@ -173,14 +173,21 @@ def reply_with(request, rcode):
   return ans.pack()
 
 def is_polluted_answer(dns, *, requireAR=False):
-  if dns.rr and dns.q.qtype != 1 and dns.a.rtype == 1:
-    # asked AAAA, answered A
-    return True
 
-  if requireAR and isinstance(dns.a, dnslib.A) and not dns.ar:
-    # No additional records, but it should have
-    logger.warn('no additional records, skipping: %r', dns.rr)
-    return True
+  if isinstance(dns.a.rdata, dnslib.A):
+
+    if dns.rr and dns.q.qtype != 1:
+      # asked AAAA, answered A
+      return True
+
+    if requireAR and not dns.ar:
+      # No additional records, but it should have
+      logger.warn('no additional records, skipping: %r', dns.rr)
+      return True
+
+    if len(dns.rr) == 1 and 1000 < dns.a.ttl < 3600 and not dns.ar:
+      logger.warn('skipping suspicious: %r', dns.rr)
+      return True
 
   for ans in dns.rr:
     if isinstance(ans.rdata, dnslib.A) and \
