@@ -400,7 +400,8 @@ class UDPDNSServer(DNSCommon):
     end = time.time()
     if failed:
       self.failed_times += 1
-    self.record_time(end - start)
+    else:
+      self.record_time(end - start)
     for fu in futures:
       fu.add_done_callback(catch_timeout)
 
