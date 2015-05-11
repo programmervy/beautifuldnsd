@@ -435,7 +435,7 @@ class DNSClient(DNSCommon):
     self.type = socket.SOCK_DGRAM if proto == 'udp' else socket.SOCK_STREAM
     self._id_dict = {}
     self.connect()
-    if on_pollution in ('skip', 'switch'):
+    if on_pollution in ('skip', 'switch', 'noaction'):
       self.on_pollution = on_pollution
     else:
       raise ValueError('unknown option %r for on_pollution' % on_pollution)
@@ -574,7 +574,7 @@ class DNSClient(DNSCommon):
       logger.debug('%s: dropping not-requested ans:\n%s', self, dns)
       return
 
-    if is_polluted_answer(dns, requireAR=self.requireAR):
+    if self.on_pollution != 'noaction' and is_polluted_answer(dns, requireAR=self.requireAR):
       POLLUTED_DOMAINS[str(dns.q.qname).encode('latin1')] = time_as_bytes()
       if self.on_pollution == 'skip':
         logger.warn('%s: skipping polluted answer:\n%s', self, dns.rr)
