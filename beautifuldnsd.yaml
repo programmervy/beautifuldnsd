@@ -9,7 +9,8 @@ upstreams:
   # 第一个推荐使用 ISP 提供的 DNS 服务器地址
   - ip: 202.106.0.20
     port: 53
-    # 遇到 DNS 污染的处理。默认跳过。国内 DNS 服务器请设置为 switch 切换到其它
+    # 遇到 DNS 污染的处理。默认跳过（skip）。国内 DNS 服务器请设置为 switch 切换到其它
+    # 如果是经过代理的不受污染的服务器，请设置为 noaction
     # DNS 服务器
     on_pollution: switch
     china_only: true
