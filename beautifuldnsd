@@ -348,7 +348,7 @@ class UDPDNSServer(DNSCommon):
             continue
           if notchina and server.china_only:
             continue
-          if not skipping or server.on_pollution == 'skip':
+          if not skipping or server.on_pollution != 'switch':
             break
         logger.debug('%s: trying server %s', self, server)
         fu = asyncio.async(server.query(request), loop=self.loop)
