@@ -180,10 +180,11 @@ def is_polluted_answer(dns, *, requireAR=False):
       # asked AAAA, answered A
       return True
 
-    if requireAR and not dns.ar:
-      # No additional records, but it should have
-      logger.warn('no additional records, skipping: %r', dns.rr)
-      return True
+    # This may be false
+    # if requireAR and not dns.ar:
+    #   # No additional records, but it should have
+    #   logger.warn('no additional records, skipping: %r', dns.rr)
+    #   return True
 
     if len(dns.rr) == 1 and 1000 < dns.a.ttl < 3600 and not dns.ar:
       logger.warn('skipping suspicious: %r', dns.rr)
@@ -509,7 +510,7 @@ class DNSClient(DNSCommon):
           yield from self.connecting
           continue
         except asyncio.TimeoutError:
-          logger.warn('%s: timed out for %s of %s', self,
+          logger.info('%s: timed out for %s of %s', self,
                       dnslib.QTYPE[request.q.qtype], request.q.qname)
           do_record = False
           self.timeouts += 1
