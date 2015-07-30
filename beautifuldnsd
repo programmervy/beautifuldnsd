@@ -180,15 +180,11 @@ def is_polluted_answer(dns, *, requireAR=False):
       # asked AAAA, answered A
       return True
 
-    # This may be false
-    # if requireAR and not dns.ar:
-    #   # No additional records, but it should have
-    #   logger.warn('no additional records, skipping: %r', dns.rr)
+    # wrong for UDP:168.95.1.1:53
+    # <DNS RR: 'pop.ym.163.com.' rtype=A rclass=IN ttl=1968 rdata='123.58.177.53'>
+    # if len(dns.rr) == 1 and 1800 < dns.a.ttl < 3600 and not dns.ar:
+    #   logger.warn('skipping suspicious: %r', dns.rr)
     #   return True
-
-    if len(dns.rr) == 1 and 1000 < dns.a.ttl < 3600 and not dns.ar:
-      logger.warn('skipping suspicious: %r', dns.rr)
-      return True
 
   for ans in dns.rr:
     if isinstance(ans.rdata, dnslib.A) and \
