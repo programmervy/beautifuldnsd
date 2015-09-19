@@ -217,6 +217,13 @@ def is_china_ip(dns):
         return True
   return default
 
+def general_ip(dns):
+  for ans in dns.rr:
+    if isinstance(ans.rdata, dnslib.A):
+      if str(ans.rdata) == '0.0.0.0':
+        return True
+  return False
+
 @asyncio.coroutine
 def get_bogus_nxdomain_one(client, interval):
   interval_ = 0
@@ -228,7 +235,7 @@ def get_bogus_nxdomain_one(client, interval):
     try:
       ans, parsed = yield from client.query(req)
     except Exception as e:
-      logger.debug('%r while discovering bogus IP. Will try later.', e)
+      logger.warn('%r while discovering bogus IP. Will try later.', e)
       interval_ = 10
       continue
 
@@ -415,7 +422,6 @@ class DNSClient(DNSCommon):
   connecting = None
   timeouts = 0
   wins = 0
-  _reconnect_on_timeout = False
 
   def __new__(cls, *args, proto='udp', **kwargs):
     if proto == 'udp':
@@ -458,6 +464,7 @@ class DNSClient(DNSCommon):
     self.close()
     self.sock = socket.socket(ip_family(self.address[0]), self.type)
     self.sock.setblocking(False)
+    logger.debug('%s: connecting', self)
     self.connecting = self.loop.sock_connect(self.sock, self.address)
     self.connecting.add_done_callback(self.connected)
 
@@ -479,11 +486,16 @@ class DNSClient(DNSCommon):
   def watch_answers(self):
     self.loop.add_reader(self.sock.fileno(), self.on_answer)
 
+  def before_query(self):
+    pass
+
   @asyncio.coroutine
   def query(self, request):
     '''
     may raise asyncio.TimeoutError
     '''
+    self.before_query()
+
     if self.connecting:
       yield from self.connecting
 
@@ -510,8 +522,6 @@ class DNSClient(DNSCommon):
                       dnslib.QTYPE[request.q.qtype], request.q.qname)
           do_record = False
           self.timeouts += 1
-          if self._reconnect_on_timeout:
-            self.connect()
           # propagate further
           raise
         except OSError as e:
@@ -589,7 +599,7 @@ class DNSClient(DNSCommon):
                     self, dns.rr)
         fu.set_exception(SwitchServer('bad answer'))
         return
-    elif self.china_only and not is_china_ip(dns):
+    elif self.china_only and not is_china_ip(dns) and not general_ip(dns):
         logger.debug('%s: non-china IPs for %s. switching to next upstream.',
                     self, dns.rr)
         fu.set_exception(NotChina)
@@ -613,10 +623,23 @@ class UDPDNSClient(DNSClient):
     return ans
 
 class TCPDNSClient(DNSClient):
-  _reconnect_on_timeout = True
   def prepare_request(self, request):
     p = request.pack()
     return struct.pack('!H', len(p)) + p
+
+  def connect(self):
+    pass
+
+  def watch_answers(self):
+    pass
+
+  def before_query(self):
+    super().connect()
+
+  def connected(self, fu):
+    fu.result()
+    logger.debug('%s: connected', self)
+    super().watch_answers()
 
   @asyncio.coroutine
   def recv_data(self):
@@ -624,6 +647,7 @@ class TCPDNSClient(DNSClient):
     header = yield from recv_exactly(s, 2)
     n = struct.unpack('!H', header)[0]
     ans = yield from recv_exactly(s, n)
+    self.close()
     return ans
 
 def show_stats(statables, signo=0, frame=None):
