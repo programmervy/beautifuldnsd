@@ -382,7 +382,7 @@ class UDPDNSServer(DNSCommon):
           if parsed.header.rcode == SERVFAIL:
             continue
           server.wins += 1
-          logger.debug('%s: %r', self, parsed.a)
+          logger.debug('%s: %r from %s', self, parsed.a, server)
           got_it = True
           break
         elif isinstance(ex, SwitchServer):
