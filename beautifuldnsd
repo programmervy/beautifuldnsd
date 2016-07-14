@@ -192,7 +192,7 @@ def is_polluted_answer(dns, *, requireAR=False):
       return True
     # 北京
     if isinstance(ans.rdata, dnslib.PTR) and \
-       str(ans.rdata) == 'localhost.':
+       str(ans.rdata) in ('localhost.', 'bogon.'):
       return True
     else:
       return False
