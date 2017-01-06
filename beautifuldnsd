@@ -465,7 +465,7 @@ class DNSClient(DNSCommon):
     self.sock = socket.socket(ip_family(self.address[0]), self.type)
     self.sock.setblocking(False)
     logger.debug('%s: connecting', self)
-    self.connecting = self.loop.sock_connect(self.sock, self.address)
+    self.connecting = asyncio.Task(self.loop.sock_connect(self.sock, self.address))
     self.connecting.add_done_callback(self.connected)
 
   def connected(self, fu):
