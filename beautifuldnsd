@@ -110,6 +110,9 @@ POLLUTION_IPS = None
 POLLUTED_DOMAINS = None
 GEOIP = None
 
+def repr_qtype(qtype):
+  return dnslib.QTYPE.get(qtype)
+
 class SwitchServer(Exception): pass
 
 class NotChina(Exception): pass
@@ -334,8 +337,9 @@ class UDPDNSServer(DNSCommon):
 
     start = time.time()
     request = dnslib.DNSRecord.parse(data)
-    logger.debug('%r request for %s of %s', addr,
-                 dnslib.QTYPE[request.q.qtype], request.q.qname)
+    if logger.isEnabledFor(logging.DEBUG):
+      logger.debug('%r request for %s of %s', addr,
+                   repr_qtype(request.q.qtype), request.q.qname)
 
     no_more = False
     failed = False
@@ -518,8 +522,9 @@ class DNSClient(DNSCommon):
           yield from self.connecting
           continue
         except asyncio.TimeoutError:
-          logger.info('%s: timed out for %s of %s', self,
-                      dnslib.QTYPE[request.q.qtype], request.q.qname)
+          if logger.isEnabledFor(logging.INFO):
+            logger.info('%s: timed out for %s of %s', self,
+                        repr_qtype(request.q.qtype), request.q.qname)
           do_record = False
           self.timeouts += 1
           # propagate further
@@ -542,7 +547,7 @@ class DNSClient(DNSCommon):
       if do_record:
         if dns and dns.header.rcode == SERVFAIL:
           logger.warn('%s: server failed for %s of %s', self,
-                      dnslib.QTYPE[request.q.qtype], request.q.qname)
+                      repr_qtype(request.q.qtype), request.q.qname)
           self.failed_times += 1
         self.record_time(e-s)
 
