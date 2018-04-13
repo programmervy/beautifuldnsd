@@ -429,6 +429,7 @@ class DNSClient(DNSCommon):
   connecting = None
   timeouts = 0
   wins = 0
+  subnet = None
 
   def __new__(cls, *args, proto='udp', **kwargs):
     if proto == 'udp':
@@ -443,6 +444,7 @@ class DNSClient(DNSCommon):
 
   def __init__(self, ip, port=53, proto='udp',
                *, timeout=10, on_pollution='skip',
+               subnet=None,
                china_only = False,
                discover_bogus_ip=False,
                discover_interval=600,
@@ -451,6 +453,8 @@ class DNSClient(DNSCommon):
     self.timeout = timeout
     self.address = ip, port
     self.type = socket.SOCK_DGRAM if proto == 'udp' else socket.SOCK_STREAM
+    if subnet is not None:
+      self.subnet = ipaddress.IPv4Network(subnet)
     self._id_dict = {}
     self.connect()
     if on_pollution in ('skip', 'switch', 'noaction'):
@@ -496,6 +500,26 @@ class DNSClient(DNSCommon):
   def before_query(self):
     pass
 
+  def _may_add_ecs(self, req):
+    if self.subnet is None:
+      return req
+
+    subnet = self.subnet
+    plen = subnet.prefixlen
+    addr = int(subnet.network_address)
+    data = struct.pack('!HBBI', 1, plen, 0, addr)
+    drop_n = (32 - plen) // 8
+    data = data[:-drop_n]
+
+    option = dnslib.EDNSOption(8, data)
+    r = dnslib.DNSRecord.parse(req.pack())
+    if r.ar and r.ar[0].rtype == 41:
+      r.ar[0].rdata.append(option)
+    else:
+      edns0 = dnslib.EDNS0(flags='do', udp_len=4096, opts=[option])
+      r.add_ar(edns0)
+    return r
+
   @asyncio.coroutine
   def query(self, request):
     '''
@@ -506,6 +530,7 @@ class DNSClient(DNSCommon):
     if self.connecting:
       yield from self.connecting
 
+    request = self._may_add_ecs(request)
     data = self.prepare_request(request)
     s = e = time.time()
     do_record = True
