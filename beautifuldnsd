@@ -22,9 +22,8 @@ import dnslib
 import yaml
 try:
   from yaml import CLoader as Loader
-  from yaml import CDumper as Dumper
 except ImportError:
-  from yaml import Loader, Dumper
+  from yaml import Loader
 try:
   import pygeoip
 except ImportError:
@@ -238,8 +237,12 @@ def get_bogus_nxdomain_one(client, interval):
     try:
       ans, parsed = yield from client.query(req)
     except Exception as e:
-      logger.warn('%r while discovering bogus IP. Will try later.', e)
-      interval_ = 10
+      if isinstance(e, SwitchServer):
+        interval_ = interval
+        logger.warn('%r while discovering bogus IP.', e)
+      else:
+        logger.warn('%r while discovering bogus IP. Will try later.', e)
+        interval_ = 10
       continue
 
     if parsed.header.rcode == SERVFAIL:
@@ -605,10 +608,22 @@ class DNSClient(DNSCommon):
         fu.set_exception(SwitchServer('bad answer'))
         return
     elif self.china_only and not is_china_ip(dns) and not general_ip(dns):
-        logger.debug('%s: non-china IPs for %s. switching to next upstream.',
-                    self, dns.rr)
-        fu.set_exception(NotChina)
-        return
+      logger.debug('%s: non-china IPs for %s. switching to next upstream.',
+                  self, dns.rr)
+      fu.set_exception(NotChina)
+      return
+    elif self.address[0] == '202.106.195.68' and not dns.rr \
+        and isinstance(dns.a.rdata, dnslib.A):
+      # quick hack for static.zhihu.com etc.
+      logger.warn('%s: empty answer for %r, switching to next.', self, dns.q)
+      fu.set_exception(SwitchServer('bad answer'))
+      return
+    elif self.address[0] == '221.130.33.52' \
+        and all(r.rtype == 5 for r in dns.rr):
+      # 中国移动 may fail with c.disquscdn.com etc.
+      logger.warn('%s: all-CNAME answer for %r, switching to next.', self, dns.q)
+      fu.set_exception(SwitchServer('bad answer'))
+      return
     fu.set_result((ans, dns))
 
   def log_stat(self):
