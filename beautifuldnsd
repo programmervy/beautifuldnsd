@@ -445,6 +445,7 @@ class DNSClient(DNSCommon):
   def __init__(self, ip, port=53, proto='udp',
                *, timeout=10, on_pollution='skip',
                subnet=None,
+               mark=0,
                china_only = False,
                discover_bogus_ip=False,
                discover_interval=600,
@@ -453,8 +454,11 @@ class DNSClient(DNSCommon):
     self.timeout = timeout
     self.address = ip, port
     self.type = socket.SOCK_DGRAM if proto == 'udp' else socket.SOCK_STREAM
+
     if subnet is not None:
       self.subnet = ipaddress.IPv4Network(subnet)
+    self.mark = mark
+
     self._id_dict = {}
     self.connect()
     if on_pollution in ('skip', 'switch', 'noaction'):
@@ -466,6 +470,19 @@ class DNSClient(DNSCommon):
     # or we'll add our random domains into db
     self.requireAR = not discover_bogus_ip
     self.china_only = china_only
+
+  def __repr__(self):
+    if self.mark:
+      return '<%s [%s](%d)>' % (
+        self.__class__.__name__,
+        self.format_address(),
+        self.mark,
+      )
+    else:
+      return '<%s [%s]>' % (
+        self.__class__.__name__,
+        self.format_address(),
+      )
 
   def discover_bogus_ip(self, interval):
     asyncio.ensure_future(get_bogus_nxdomain_one(self, interval),
@@ -492,6 +509,8 @@ class DNSClient(DNSCommon):
       else:
         raise
     logger.info('%s: connected', self)
+    if self.mark:
+      self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_MARK, self.mark)
     self.watch_answers()
 
   def watch_answers(self):
