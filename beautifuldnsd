@@ -327,7 +327,7 @@ class UDPDNSServer(DNSCommon):
 
   def on_request(self):
     co = self.handle_request()
-    fu = asyncio.async(co, loop=self.loop)
+    fu = asyncio.ensure_future(co, loop=self.loop)
     fu.add_done_callback(lambda fu: fu.result())
 
   @asyncio.coroutine
@@ -362,7 +362,7 @@ class UDPDNSServer(DNSCommon):
           if not skipping or server.on_pollution != 'switch':
             break
         logger.debug('%s: trying server %s', self, server)
-        fu = asyncio.async(server.query(request), loop=self.loop)
+        fu = asyncio.ensure_future(server.query(request), loop=self.loop)
         futures[fu] = server
       except StopIteration:
         concurrent_delay = None
@@ -468,7 +468,7 @@ class DNSClient(DNSCommon):
     self.china_only = china_only
 
   def discover_bogus_ip(self, interval):
-    asyncio.async(get_bogus_nxdomain_one(self, interval),
+    asyncio.ensure_future(get_bogus_nxdomain_one(self, interval),
                   loop=self.loop)
 
   def connect(self):
@@ -596,7 +596,7 @@ class DNSClient(DNSCommon):
 
   def on_answer(self):
     co = self.handle_response()
-    fu = asyncio.async(co, loop=self.loop)
+    fu = asyncio.ensure_future(co, loop=self.loop)
     fu.add_done_callback(lambda fu: fu.result())
 
   @asyncio.coroutine
