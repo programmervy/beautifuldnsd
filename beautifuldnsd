@@ -215,7 +215,10 @@ def is_china_ip(dns):
   for ans in dns.rr:
     if isinstance(ans.rdata, dnslib.A):
       default = False
-      if GEOIP.country_code_by_addr(str(ans.rdata)) == 'CN':
+      ip = str(ans.rdata)
+      if ipaddress.ip_address(ip).is_private:
+        return True
+      if GEOIP.country_code_by_addr(ip) == 'CN':
         return True
   return default
 
