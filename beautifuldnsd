@@ -391,6 +391,9 @@ class UDPDNSServer(DNSCommon):
           ans, parsed = fu.result()
           if parsed.header.rcode == SERVFAIL:
             continue
+          elif is_bogus_nxdomain(parsed):
+            logger.warning('%s: bogus answer, ignored.', self)
+            continue
           server.wins += 1
           logger.debug('%s: %r from %s', self, parsed.a, server)
           got_it = True
