@@ -185,7 +185,7 @@ def is_polluted_answer(dns, *, requireAR=False):
     # wrong for UDP:168.95.1.1:53
     # <DNS RR: 'pop.ym.163.com.' rtype=A rclass=IN ttl=1968 rdata='123.58.177.53'>
     # if len(dns.rr) == 1 and 1800 < dns.a.ttl < 3600 and not dns.ar:
-    #   logger.warn('skipping suspicious: %r', dns.rr)
+    #   logger.warning('skipping suspicious: %r', dns.rr)
     #   return True
 
   for ans in dns.rr:
@@ -242,9 +242,9 @@ def get_bogus_nxdomain_one(client, interval):
     except Exception as e:
       if isinstance(e, SwitchServer):
         interval_ = interval
-        logger.warn('%r while discovering bogus IP.', e)
+        logger.warning('%r while discovering bogus IP.', e)
       else:
-        logger.warn('%r while discovering bogus IP. Will try later.', e)
+        logger.warning('%r while discovering bogus IP. Will try later.', e)
         interval_ = 10
       continue
 
@@ -407,10 +407,10 @@ class UDPDNSServer(DNSCommon):
         break
 
     if failed:
-      logger.warn('%s: all servers failed to reply for %r', self, request.q)
+      logger.warning('%s: all servers failed to reply for %r', self, request.q)
       ans = reply_with(request, SERVFAIL)
     elif is_bogus_nxdomain(parsed):
-      logger.warn('%s: bogus nxdomain, sending back nxdomain to %r',
+      logger.warning('%s: bogus nxdomain, sending back nxdomain to %r',
                   self, addr)
       ans = reply_with(request, dnslib.RCODE.NXDOMAIN)
     else:
@@ -567,7 +567,7 @@ class DNSClient(DNSCommon):
             timeout = timeleft)
           break
         except (ConnectionError, BrokenPipeError):
-          logger.warn('%s: connection error, reconnecting', self, exc_info=True)
+          logger.warning('%s: connection error, reconnecting', self, exc_info=True)
           self.connect()
           yield from self.connecting
           continue
@@ -596,7 +596,7 @@ class DNSClient(DNSCommon):
     finally:
       if do_record:
         if dns and dns.header.rcode == SERVFAIL:
-          logger.warn('%s: server failed for %s of %s', self,
+          logger.warning('%s: server failed for %s of %s', self,
                       repr_qtype(request.q.qtype), request.q.qname)
           self.failed_times += 1
         self.record_time(e-s)
@@ -647,10 +647,10 @@ class DNSClient(DNSCommon):
     if self.on_pollution != 'noaction' and is_polluted_answer(dns, requireAR=self.requireAR):
       POLLUTED_DOMAINS[str(dns.q.qname).encode('latin1')] = time_as_bytes()
       if self.on_pollution == 'skip':
-        logger.warn('%s: skipping polluted answer:\n%s', self, dns.rr)
+        logger.warning('%s: skipping polluted answer:\n%s', self, dns.rr)
         return
       elif self.on_pollution == 'switch':
-        logger.warn('%s: bad answer for %s. switching to next upstream.',
+        logger.warning('%s: bad answer for %s. switching to next upstream.',
                     self, dns.rr)
         fu.set_exception(SwitchServer('bad answer'))
         return
@@ -662,13 +662,7 @@ class DNSClient(DNSCommon):
     elif self.address[0] == '202.106.195.68' and not dns.rr \
         and isinstance(dns.a.rdata, dnslib.A):
       # quick hack for static.zhihu.com etc.
-      logger.warn('%s: empty answer for %r, switching to next.', self, dns.q)
-      fu.set_exception(SwitchServer('bad answer'))
-      return
-    elif self.address[0] == '221.130.33.52' \
-        and all(r.rtype == 5 for r in dns.rr):
-      # 中国移动 may fail with c.disquscdn.com etc.
-      logger.warn('%s: all-CNAME answer for %r, switching to next.', self, dns.q)
+      logger.warning('%s: empty answer for %r, switching to next.', self, dns.q)
       fu.set_exception(SwitchServer('bad answer'))
       return
     fu.set_result((ans, dns))
