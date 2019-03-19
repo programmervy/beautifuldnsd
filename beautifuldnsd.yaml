@@ -20,6 +20,12 @@ upstreams:
     discover_interval: 600 # seconds
   - ip: 8.8.8.8
     on_pollution: skip
+    # 设置 socks5 代理
+    # proxy:
+    # - 127.0.0.1
+    # - 1080
+    # 给数据包打上标签以便路由
+    # mark: 1
   # 路由器提供的 DNS 功能
   - ip: 192.168.1.1
     on_pollution: switch

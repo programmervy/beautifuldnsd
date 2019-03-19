@@ -29,6 +29,11 @@ try:
 except ImportError:
   pygeoip = None
 
+try:
+  import socks as socksproxy
+except ImportError:
+  socksproxy = None
+
 def loadyaml(src):
   return yaml.load(src, Loader=Loader)
 
@@ -435,6 +440,7 @@ class DNSClient(DNSCommon):
   timeouts = 0
   wins = 0
   subnet = None
+  proxy = None
 
   def __new__(cls, *args, proto='udp', **kwargs):
     if proto == 'udp':
@@ -450,6 +456,7 @@ class DNSClient(DNSCommon):
   def __init__(self, ip, port=53, proto='udp',
                *, timeout=10, on_pollution='skip',
                subnet=None,
+               proxy=None,
                mark=0,
                china_only = False,
                discover_bogus_ip=False,
@@ -462,6 +469,10 @@ class DNSClient(DNSCommon):
 
     if subnet is not None:
       self.subnet = ipaddress.IPv4Network(subnet)
+    if socksproxy:
+      self.proxy = proxy
+    else:
+      logger.error('PySocks not available, proxy ignored.')
     self.mark = mark
 
     self._id_dict = {}
@@ -495,7 +506,13 @@ class DNSClient(DNSCommon):
 
   def connect(self):
     self.close()
-    self.sock = socket.socket(ip_family(self.address[0]), self.type)
+
+    if self.proxy:
+      self.sock = socksproxy.socksocket(ip_family(self.address[0]), self.type)
+      self.sock.set_proxy(socksproxy.SOCKS5, self.proxy[0], self.proxy[1])
+    else:
+      self.sock = socket.socket(ip_family(self.address[0]), self.type)
+
     self.sock.setblocking(False)
     logger.debug('%s: connecting', self)
     self.connecting = asyncio.Task(self.loop.sock_connect(self.sock, self.address))
