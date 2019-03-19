@@ -182,12 +182,6 @@ def is_polluted_answer(dns, *, requireAR=False):
       # asked AAAA, answered A
       return True
 
-    # wrong for UDP:168.95.1.1:53
-    # <DNS RR: 'pop.ym.163.com.' rtype=A rclass=IN ttl=1968 rdata='123.58.177.53'>
-    # if len(dns.rr) == 1 and 1800 < dns.a.ttl < 3600 and not dns.ar:
-    #   logger.warning('skipping suspicious: %r', dns.rr)
-    #   return True
-
   for ans in dns.rr:
     if isinstance(ans.rdata, dnslib.A) and \
        str(ans.rdata) in POLLUTION_IPS:
@@ -216,6 +210,8 @@ def is_china_ip(dns):
     if isinstance(ans.rdata, dnslib.A):
       default = False
       ip = str(ans.rdata)
+      if ip == '127.0.0.1':
+        return False
       if ipaddress.ip_address(ip).is_private:
         return True
       if GEOIP.country_code_by_addr(ip) == 'CN':
@@ -333,8 +329,7 @@ class UDPDNSServer(DNSCommon):
     fu = asyncio.ensure_future(co, loop=self.loop)
     fu.add_done_callback(lambda fu: fu.result())
 
-  @asyncio.coroutine
-  def handle_request(self):
+  async def handle_request(self):
     s = self.sock
     try:
       data, addr = s.recvfrom(40960)
@@ -374,8 +369,8 @@ class UDPDNSServer(DNSCommon):
           failed = True
           break
 
-      done, pending = yield from asyncio.wait(
-        futures.keys(), loop=self.loop,
+      done, pending = await asyncio.wait(
+        futures.keys(),
         timeout = concurrent_delay,
         return_when=asyncio.FIRST_COMPLETED)
 
@@ -393,6 +388,10 @@ class UDPDNSServer(DNSCommon):
             continue
           elif is_bogus_nxdomain(parsed):
             logger.warning('%s: bogus answer, ignored.', self)
+            continue
+          elif parsed.header.tc:
+            logger.warning('%s: truncated answer, ignored:\n%s',
+                           self, parsed)
             continue
           server.wins += 1
           logger.debug('%s: %r from %s', self, parsed.a, server)
@@ -545,15 +544,14 @@ class DNSClient(DNSCommon):
       r.add_ar(edns0)
     return r
 
-  @asyncio.coroutine
-  def query(self, request):
+  async def query(self, request):
     '''
     may raise asyncio.TimeoutError
     '''
     self.before_query()
 
     if self.connecting:
-      yield from self.connecting
+      await self.connecting
 
     request = self._may_add_ecs(request)
     data = self.prepare_request(request)
@@ -564,15 +562,15 @@ class DNSClient(DNSCommon):
       while True:
         timeleft = s + self.timeout - e
         try:
-          yield from self.loop.sock_sendall(self.sock, data)
-          ans, dns = yield from asyncio.wait_for(
+          await self.loop.sock_sendall(self.sock, data)
+          ans, dns = await asyncio.wait_for(
             self.recv_answer(request),
             timeout = timeleft)
           break
         except (ConnectionError, BrokenPipeError):
           logger.warning('%s: connection error, reconnecting', self, exc_info=True)
           self.connect()
-          yield from self.connecting
+          await self.connecting
           continue
         except asyncio.TimeoutError:
           if logger.isEnabledFor(logging.INFO):
@@ -600,7 +598,7 @@ class DNSClient(DNSCommon):
       if do_record:
         if dns and dns.header.rcode == SERVFAIL:
           logger.warning('%s: server failed for %s of %s', self,
-                      repr_qtype(request.q.qtype), request.q.qname)
+                         repr_qtype(request.q.qtype), request.q.qname)
           self.failed_times += 1
         self.record_time(e-s)
 
@@ -662,10 +660,9 @@ class DNSClient(DNSCommon):
                   self, dns.rr)
       fu.set_exception(NotChina)
       return
-    elif self.address[0] == '202.106.195.68' and not dns.rr \
-        and isinstance(dns.a.rdata, dnslib.A):
-      # quick hack for static.zhihu.com etc.
-      logger.warning('%s: empty answer for %r, switching to next.', self, dns.q)
+    elif self.china_only and dns.q.qtype == 1 and dns.rr and all(r.rtype == 5 for r in dns.rr):
+      # qtype=A and all rtype=CNAME
+      logger.warning('%s: all-CNAME answer for %r, switching to next.', self, dns.q)
       fu.set_exception(SwitchServer('bad answer'))
       return
     fu.set_result((ans, dns))
