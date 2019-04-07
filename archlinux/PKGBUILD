@@ -18,7 +18,7 @@ source=(${pkgname}-${pkgver}.tar.gz::${url}/archive/v${pkgver}.tar.gz)
 sha512sums=('1516c34da9b66e492cd85b9a71c01682a0ffe90c00b1e8aaf6eacbc2aad2e8482653042eb476438aa92a837ced6d123bd695bab0a55cce1d292bd50de5668b46')
 
 package() {
-  cd "${srcdir}/${pkgname}-${pkgver}"
+  cd ~/workspace/github/beautifuldnsd
   install -D -m644 systemd/beautifuldnsd.service "${pkgdir}/usr/lib/systemd/system/${pkgname}.service"
   install -D -m644 systemd/tmpfiles.conf "${pkgdir}/usr/lib/tmpfiles.d/${pkgname}.conf"
   install -D -m644 beautifuldnsd.yaml "${pkgdir}/etc/${pkgname}.yaml"

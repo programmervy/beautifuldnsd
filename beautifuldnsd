@@ -117,9 +117,14 @@ GEOIP = None
 def repr_qtype(qtype):
   return dnslib.QTYPE.get(qtype)
 
+async def async_pass():
+  pass
+
 class SwitchServer(Exception): pass
 
 class NotChina(Exception): pass
+
+class NotConnected(Exception): pass
 
 def config_logging(level=logging.WARN, style=None):
   '''
@@ -161,13 +166,12 @@ def ip_family(ip):
 def time_as_bytes():
   return struct.pack('<Q', int(time.time()))
 
-@asyncio.coroutine
-def recv_exactly(sock, n, *, loop=None):
-  loop = loop or asyncio.get_event_loop()
+async def recv_exactly(sock, n):
+  loop = asyncio.get_event_loop()
   data = b''
   left = n
   while left:
-    d = yield from loop.sock_recv(sock, left)
+    d = await loop.sock_recv(sock, left)
     if not d:
       raise ConnectionClosedError
     data += d
@@ -194,6 +198,10 @@ def is_polluted_answer(dns, *, requireAR=False):
     # 北京
     if isinstance(ans.rdata, dnslib.PTR) and \
        str(ans.rdata) in ('localhost.', 'bogon.'):
+      return True
+    # bad node?
+    elif isinstance(ans.rdata, dnslib.A) and \
+       str(ans.rdata) in ('39.137.66.99', '39.137.66.98'):
       return True
     else:
       return False
@@ -315,10 +323,10 @@ class UDPDNSServer(DNSCommon):
   sock = None
   type = socket.SOCK_DGRAM
 
-  def __init__(self, address, upstreams,
-               *, loop=None, concurrent_delay=None):
+  def __init__(self, address, upstreams, *,
+               concurrent_delay=None):
     self.address = address
-    self.loop = loop = loop or asyncio.get_event_loop()
+    self.loop = loop = asyncio.get_event_loop()
     self.upstreams = upstreams
     self.concurrent_delay = concurrent_delay
 
@@ -331,7 +339,7 @@ class UDPDNSServer(DNSCommon):
 
   def on_request(self):
     co = self.handle_request()
-    fu = asyncio.ensure_future(co, loop=self.loop)
+    fu = asyncio.ensure_future(co)
     fu.add_done_callback(lambda fu: fu.result())
 
   async def handle_request(self):
@@ -365,7 +373,7 @@ class UDPDNSServer(DNSCommon):
           if not skipping or server.on_pollution != 'switch':
             break
         logger.debug('%s: trying server %s', self, server)
-        fu = asyncio.ensure_future(server.query(request), loop=self.loop)
+        fu = asyncio.ensure_future(server.query(request))
         futures[fu] = server
       except StopIteration:
         concurrent_delay = None
@@ -406,7 +414,7 @@ class UDPDNSServer(DNSCommon):
           skipping = True
         elif isinstance(ex, NotChina):
           notchina = True
-        elif isinstance(ex, asyncio.TimeoutError):
+        elif isinstance(ex, (asyncio.TimeoutError, OSError, NotConnected)):
           pass
         else:
           raise ex
@@ -441,6 +449,7 @@ class DNSClient(DNSCommon):
   wins = 0
   subnet = None
   proxy = None
+  _connected = False
 
   def __new__(cls, *args, proto='udp', **kwargs):
     if proto == 'udp':
@@ -458,11 +467,10 @@ class DNSClient(DNSCommon):
                subnet=None,
                proxy=None,
                mark=0,
-               china_only = False,
+               china_only=False,
                discover_bogus_ip=False,
-               discover_interval=600,
-               loop=None):
-    self.loop = loop or asyncio.get_event_loop()
+               discover_interval=600):
+    self.loop = asyncio.get_event_loop()
     self.timeout = timeout
     self.address = ip, port
     self.type = socket.SOCK_DGRAM if proto == 'udp' else socket.SOCK_STREAM
@@ -501,11 +509,11 @@ class DNSClient(DNSCommon):
       )
 
   def discover_bogus_ip(self, interval):
-    asyncio.ensure_future(get_bogus_nxdomain_one(self, interval),
-                  loop=self.loop)
+    asyncio.ensure_future(get_bogus_nxdomain_one(self, interval))
 
   def connect(self):
     self.close()
+    self._connected = False
 
     if self.proxy:
       self.sock = socksproxy.socksocket(ip_family(self.address[0]), self.type)
@@ -515,11 +523,20 @@ class DNSClient(DNSCommon):
 
     self.sock.setblocking(False)
     logger.debug('%s: connecting', self)
-    self.connecting = asyncio.Task(self.loop.sock_connect(self.sock, self.address))
+    if self.proxy:
+      try:
+        self.sock.connect(self.address)
+      except ConnectionRefusedError:
+        logger.error('%s: ConnectionRefusedError', self)
+        return
+      self.connecting = asyncio.Task(async_pass())
+    else:
+      self.connecting = asyncio.Task(self.loop.sock_connect(self.sock, self.address))
     self.connecting.add_done_callback(self.connected)
 
   def connected(self, fu):
     self.connecting = None
+    self._connected = True
     try:
       fu.result()
     except TimeoutError:
@@ -569,6 +586,8 @@ class DNSClient(DNSCommon):
 
     if self.connecting:
       await self.connecting
+    if not self._connected:
+      raise NotConnected
 
     request = self._may_add_ecs(request)
     data = self.prepare_request(request)
@@ -621,13 +640,12 @@ class DNSClient(DNSCommon):
 
     return ans, dns
 
-  @asyncio.coroutine
-  def recv_answer(self, req):
-    fu = asyncio.Future(loop=self.loop)
+  async def recv_answer(self, req):
+    fu = asyncio.Future()
     id = req.header.id
     self._id_dict[id] = fu
     try:
-      return (yield from fu)
+      return (await fu)
     finally:
       try:
         del self._id_dict[id]
@@ -636,13 +654,12 @@ class DNSClient(DNSCommon):
 
   def on_answer(self):
     co = self.handle_response()
-    fu = asyncio.ensure_future(co, loop=self.loop)
+    fu = asyncio.ensure_future(co)
     fu.add_done_callback(lambda fu: fu.result())
 
-  @asyncio.coroutine
-  def handle_response(self):
+  async def handle_response(self):
     try:
-      ans = yield from self.recv_data()
+      ans = await self.recv_data()
     except (ConnectionClosedError, ConnectionResetError):
       self.connect()
       return
@@ -695,9 +712,12 @@ class UDPDNSClient(DNSClient):
   def prepare_request(self, request):
     return request.pack()
 
-  @asyncio.coroutine
-  def recv_data(self):
-    ans = yield from self.loop.sock_recv(self.sock, 40960)
+  def before_query(self):
+    if not self._connected:
+      self.connect()
+
+  async def recv_data(self):
+    ans = await self.loop.sock_recv(self.sock, 40960)
     return ans
 
 class TCPDNSClient(DNSClient):
@@ -719,12 +739,11 @@ class TCPDNSClient(DNSClient):
     logger.debug('%s: connected', self)
     super().watch_answers()
 
-  @asyncio.coroutine
-  def recv_data(self):
+  async def recv_data(self):
     s = self.sock
-    header = yield from recv_exactly(s, 2)
+    header = await recv_exactly(s, 2)
     n = struct.unpack('!H', header)[0]
-    ans = yield from recv_exactly(s, n)
+    ans = await recv_exactly(s, n)
     self.close()
     return ans
 
