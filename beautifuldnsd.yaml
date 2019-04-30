@@ -26,6 +26,8 @@ upstreams:
     # - 1080
     # 给数据包打上标签以便路由
     # mark: 1
+    # 接受 ESNI 请求（建议只对私密的服务器启用）
+    # accept_esni: true
   # 路由器提供的 DNS 功能
   - ip: 192.168.1.1
     on_pollution: switch
@@ -41,6 +43,7 @@ upstreams:
   #   timeout: 10 # seconds
   #   on_pollution: skip
   #   china_only: false
+  #   accept_esni: false
   #   discover_bogus_ip: false
   #   discover_interval: 600 # seconds
 

@@ -362,6 +362,9 @@ class UDPDNSServer(DNSCommon):
     concurrent_delay = self.concurrent_delay
     it = iter(self.upstreams)
     futures = {}
+    is_esni = request.q.qtype == 16 and \
+        request.q.qname.label[0] == b'_esni'
+
     while True:
       try:
         while True:
@@ -369,6 +372,8 @@ class UDPDNSServer(DNSCommon):
           if server is None:
             continue
           if notchina and server.china_only:
+            continue
+          if is_esni and not server.accept_esni:
             continue
           if not skipping or server.on_pollution != 'switch':
             break
@@ -470,6 +475,7 @@ class DNSClient(DNSCommon):
                subnet=None,
                proxy=None,
                mark=0,
+               accept_esni=False,
                china_only=False,
                discover_bogus_ip=False,
                discover_interval=600):
@@ -485,6 +491,7 @@ class DNSClient(DNSCommon):
     else:
       logger.error('PySocks not available, proxy ignored.')
     self.mark = mark
+    self.accept_esni = accept_esni
 
     self._id_dict = {}
     self.connect()
