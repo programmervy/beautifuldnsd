@@ -107,6 +107,7 @@ logger = logging.getLogger('beautifuldnsd')
 # TODO: handle truncated reply
 # TODO: command to re-discover bogus IP, add/remove servers
 SERVFAIL = dnslib.RCODE.SERVFAIL
+REFUSED = dnslib.RCODE.REFUSED
 NOERROR = dnslib.RCODE.NOERROR
 BOGUS_IPS = None
 BOGUS_IPS_DB = None
@@ -238,16 +239,15 @@ def general_ip(dns):
         return True
   return False
 
-@asyncio.coroutine
-def get_bogus_nxdomain_one(client, interval):
+async def get_bogus_nxdomain_one(client, interval):
   interval_ = 0
   while True:
-    yield from asyncio.sleep(interval_)
+    await asyncio.sleep(interval_)
     r = base64.b64encode(os.urandom(24)).decode('ascii')
     nxdomain = r.replace('/', '').replace('+', '') + '.com'
     req = dnslib.DNSRecord.question(nxdomain)
     try:
-      ans, parsed = yield from client.query(req)
+      ans, parsed = await client.query(req)
     except Exception as e:
       if isinstance(e, SwitchServer):
         interval_ = interval
@@ -398,6 +398,9 @@ class UDPDNSServer(DNSCommon):
         if ex is None:
           ans, parsed = fu.result()
           if parsed.header.rcode == SERVFAIL:
+            continue
+          elif parsed.header.rcode == REFUSED:
+            logger.warning('%s: refused for %s', self, parsed.q)
             continue
           elif is_bogus_nxdomain(parsed):
             logger.warning('%s: bogus answer, ignored.', self)
