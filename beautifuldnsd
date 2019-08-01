@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 
 # FIXME: bug with dig TXT 20120113._domainkey.gmail.com
 # https://bitbucket.org/paulc/dnslib/pull-request/9/update-dnspy-class-txt-to-handle-multiple/diff
@@ -185,27 +185,45 @@ def reply_with(request, rcode):
   return ans.pack()
 
 def is_polluted_answer(dns, *, requireAR=False):
+  ret, rule = _is_polluted_answer(
+    dns, requireAR=requireAR)
 
+  if ret:
+    t = time_as_bytes()
+    POLLUTED_DOMAINS[str(dns.q.qname).encode('latin1')] = t
+    if rule:
+      key = ':r:%s' % rule
+      POLLUTED_DOMAINS[key.encode('latin1')] = t
+
+  return ret
+
+def _is_polluted_answer(dns, *, requireAR=False):
   if isinstance(dns.a.rdata, dnslib.A):
-
     if dns.rr and dns.q.qtype != 1:
       # asked AAAA, answered A
-      return True
+      return True, None
+
+  if len(dns.rr) != 1:
+    return False, None
 
   for ans in dns.rr:
-    if isinstance(ans.rdata, dnslib.A) and \
-       str(ans.rdata) in POLLUTION_IPS:
-      return True
-    # 北京
+    if isinstance(ans.rdata, dnslib.A):
+      return is_in_pollution_ips(str(ans.rdata))
     if isinstance(ans.rdata, dnslib.PTR) and \
        str(ans.rdata) in ('localhost.', 'bogon.'):
-      return True
-    # bad node?
-    elif isinstance(ans.rdata, dnslib.A) and \
-       str(ans.rdata) in ('39.137.66.99', '39.137.66.98'):
-      return True
+      return True, None
     else:
-      return False
+      return False, None
+
+  return False, None
+
+def is_in_pollution_ips(ip):
+  ip = ipaddress.ip_address(ip)
+  for net in POLLUTION_IPS:
+    if ip in net:
+      return True, net
+
+  return False, None
 
 def is_polluted_domain(dns):
   key = str(dns.q.qname).encode('latin1')
@@ -690,7 +708,6 @@ class DNSClient(DNSCommon):
       return
 
     if self.on_pollution != 'noaction' and is_polluted_answer(dns, requireAR=self.requireAR):
-      POLLUTED_DOMAINS[str(dns.q.qname).encode('latin1')] = time_as_bytes()
       if self.on_pollution == 'skip':
         logger.warning('%s: skipping polluted answer:\n%s', self, dns.rr)
         return
@@ -781,7 +798,8 @@ def main():
   global BOGUS_IPS, POLLUTION_IPS, POLLUTED_DOMAINS, BOGUS_IPS_DB, GEOIP
   config = loadyaml(args.config)
   BOGUS_IPS = set(config['bogus_ips'])
-  POLLUTION_IPS = config['pollution_ips']
+  POLLUTION_IPS = [ipaddress.ip_network(x)
+                   for x in config['pollution_ips']]
   concurrent_delay = config['misc']['concurrent_delay']
   if pygeoip and config['misc'].get('geoip_db', False):
     GEOIP = pygeoip.GeoIP(config['misc']['geoip_db'])
