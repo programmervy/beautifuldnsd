@@ -185,15 +185,26 @@ def reply_with(request, rcode):
   return ans.pack()
 
 def is_polluted_answer(dns, *, requireAR=False):
-  ret, rule = _is_polluted_answer(
+  ret, rule, cname = _is_polluted_answer(
     dns, requireAR=requireAR)
 
   if ret:
+    name = cname or str(dns.q.qname)
     t = time_as_bytes()
-    POLLUTED_DOMAINS[str(dns.q.qname).encode('latin1')] = t
+    POLLUTED_DOMAINS[name.encode('latin1')] = t
     if rule:
       key = ':r:%s' % rule
       POLLUTED_DOMAINS[key.encode('latin1')] = t
+      ip = [x.rdata for x in dns.rr if x.rtype == 1][0]
+      key2 = ':ip/t:%s' % ip
+      POLLUTED_DOMAINS[key2.encode('latin1')] = t
+      key3 = ':ip/c:%s' % ip
+      c = POLLUTED_DOMAINS.get(key3.encode('latin1'))
+      if not c:
+        c = 1
+      else:
+        c = struct.unpack('<Q', c)[0] + 1
+      POLLUTED_DOMAINS[key3.encode('latin1')] = struct.pack('<Q', c)
 
   return ret
 
@@ -201,21 +212,26 @@ def _is_polluted_answer(dns, *, requireAR=False):
   if isinstance(dns.a.rdata, dnslib.A):
     if dns.rr and dns.q.qtype != 1:
       # asked AAAA, answered A
-      return True, None
+      return True, None, None
 
-  if len(dns.rr) != 1:
-    return False, None
+  if len([x for x in dns.rr if x.rtype == 1]) != 1:
+    return False, None, None
 
+  cname = None
   for ans in dns.rr:
+    if isinstance(ans.rdata, dnslib.CNAME):
+      cname = str(ans.rdata)
+      continue
     if isinstance(ans.rdata, dnslib.A):
-      return is_in_pollution_ips(str(ans.rdata))
+      ret, net = is_in_pollution_ips(str(ans.rdata))
+      return ret, net, cname
     if isinstance(ans.rdata, dnslib.PTR) and \
        str(ans.rdata) in ('localhost.', 'bogon.'):
-      return True, None
+      return True, None, cname
     else:
-      return False, None
+      return False, None, cname
 
-  return False, None
+  return False, None, cname
 
 def is_in_pollution_ips(ip):
   ip = ipaddress.ip_address(ip)
@@ -797,6 +813,7 @@ def main():
 
   global BOGUS_IPS, POLLUTION_IPS, POLLUTED_DOMAINS, BOGUS_IPS_DB, GEOIP
   config = loadyaml(args.config)
+  args.config.close()
   BOGUS_IPS = set(config['bogus_ips'])
   POLLUTION_IPS = [ipaddress.ip_network(x)
                    for x in config['pollution_ips']]
